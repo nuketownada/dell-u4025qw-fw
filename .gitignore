@@ -1,0 +1,6 @@
+# Reconstructible from U4025QW_M3T105.deb via dpkg -x / -e
+extracted/
+extracted-control/
+
+# Probe artefacts
+page.html
