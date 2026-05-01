@@ -1,2 +1,4 @@
 # Build artifacts (regenerate from decrypt-blob.cpp; see README.md).
 decrypt-blob
+decrypt-blob
+decrypt-bin

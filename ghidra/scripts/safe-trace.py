@@ -28,14 +28,26 @@ Sourced via:
 
 import gdb
 import hashlib
+import os
 
-LOG_PATH = "/tmp/safe-trace.log"
+LOG_PATH = "/agents/ada/projects/dell-u4025qw-fw/captures/safe-trace.log"
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 _logfile = open(LOG_PATH, "a", buffering=1)
 
 
 def log(msg):
     print(msg)
     _logfile.write(msg + "\n")
+    _logfile.flush()
+
+
+def write_file(path, data):
+    """Write atomically and durably — important because gdb's `quit`
+    can skip Python's normal stdio cleanup."""
+    with open(path, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def read_bytes(addr, n):
@@ -108,8 +120,8 @@ class LoadHook(gdb.Breakpoint):
                 log(f"  head        = {head.hex()}")
                 log(f"  ascii       = {head[:64].decode('ascii', errors='replace')!r}")
                 if full and size > 1024:
-                    out_path = f"/tmp/load-data-{pc:x}-sz{size}.bin"
-                    open(out_path, "wb").write(full)
+                    out_path = f"/agents/ada/projects/dell-u4025qw-fw/captures/load-data-{pc:x}-sz{size}.bin"
+                    write_file(out_path, full)
                     log(f"  full → {out_path}  sha256={hashlib.sha256(full).hexdigest()}")
             else:
                 # Try (self, vector<uint8_t>&) signature.
@@ -128,8 +140,8 @@ class LoadHook(gdb.Breakpoint):
                         if size > 1024:
                             full = read_bytes(data_ptr, size) if size <= 4 * 1024 * 1024 else None
                             if full:
-                                out_path = f"/tmp/load-vec-{pc:x}-sz{size}.bin"
-                                open(out_path, "wb").write(full)
+                                out_path = f"/agents/ada/projects/dell-u4025qw-fw/captures/load-vec-{pc:x}-sz{size}.bin"
+                                write_file(out_path, full)
                                 log(f"  full → {out_path}  sha256={hashlib.sha256(full).hexdigest()}")
                     else:
                         log(f"  vector size {size} implausible; skipping")
@@ -238,9 +250,6 @@ class PanicHook(gdb.Breakpoint):
         log("\n" + "!" * 60)
         log(f"!!! PANIC HOOK fired: {self.label}")
         log(f"!!! pc = {pc:#x}  ({memory_provenance(pc)})")
-        log("!!! gdb is now STOPPED. Inspect with `bt`, `info reg`, etc.")
-        log("!!! To abort safely:  type `kill` then `quit` at the gdb prompt.")
-        log("!" * 60)
         try:
             bt = gdb.execute("bt 8", to_string=True)
             log("backtrace at panic:")
@@ -248,7 +257,21 @@ class PanicHook(gdb.Breakpoint):
                 log(f"  {line}")
         except gdb.error:
             pass
-        return True   # actually stop
+
+        # AUTO-KILL the inferior so we never let the destructive call
+        # complete. (We're running gdb non-interactively; there's no
+        # human at the prompt to type `kill`/`quit`.)
+        log("!!! AUTO-KILLING inferior to prevent device write.")
+        log("!" * 60)
+        try:
+            gdb.execute("kill")
+        except gdb.error as e:
+            log(f"  kill failed: {e}")
+        try:
+            gdb.execute("quit")
+        except (gdb.error, SystemExit):
+            pass
+        return True
 
 
 # --------------------------------------------------------------------------

@@ -1,0 +1,496 @@
+>>> safe-trace armed: load() + decrypt_string() observed silently;
+>>> any device-mutating call HALTS gdb.
+>>> log → /agents/ada/projects/dell-u4025qw-fw/captures/safe-trace.log
+
+--- load() @ 0x7fffef3a1fe8  (html::view::load(tool::handle<html::request>) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/libsciter.so)
+  vector size 14204919033146213600 implausible; skipping
+
+--- load() @ 0x7fffef3a1fe8  (html::view::load(tool::handle<html::request>) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/libsciter.so)
+  vector size -93825001176218 implausible; skipping
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWjuuNu35yzu7QzXsNqwwYHQSSjG4friAqQ2dPfOCO_flH6F5hXUgaq8U-ix-_nbAl'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWX1wrnMz5ukQCdL_heouBDsv-mAywbQ8ZUXQ8vZgiyHQ7hYqEk9knFwDOMiPFZKwd'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'IKvqxux0hy4dg5tvg-WcRuGZWHLIp1GL-WbBAcRvH51ce9kCmD0rfnyhlmlDSq5AQ7w8d_nVLNGhY863ivnE1mEBtCUoTw_A4JvXRS-68B-1DdTJRYCVnxrz'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x555555beb720  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bHh5dbd1osXjK82rUpP_Umcgah8Lb7BD-5Bw9n65JeTV3Am4Nlmia3-h3CK18P57ReF1sUhT72WdUU5Lac1iAdRXRxX-HS7eocJy2qK-8ROzw8jUArW3jA_0'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWjuuNu35yzu7QzXsNqwwYHQSSjG4friAqQ2dPfOCO_flH6F5hXUgaq8U-ix-_nbAl'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWX1wrnMz5ukQCdL_heouBDsv-mAywbQ8ZUXQ8vZgiyHQ7hYqEk9knFwDOMiPFZKwd'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'IKvqxux0hy4dg5tvg-WcRuGZWHLIp1GL-WbBAcRvH51ce9kCmD0rfnyhlmlDSq5AQ7w8d_nVLNGhY863ivnE1mEBtCUoTw_A4JvXRS-68B-1DdTJRYCVnxrz'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x555555beb720  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bHh5dbd1osXjK82rUpP_Umcgah8Lb7BD-5Bw9n65JeTV3Am4Nlmia3-h3CK18P57ReF1sUhT72WdUU5Lac1iAdRXRxX-HS7eocJy2qK-8ROzw8jUArW3jA_0'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'xP5r-n-DdXbmqwzTrhJT5iFWdl7qgRrshbuTANR9X5a0GL73YpunMCLFFCUNjqaLg8RalMgtt9etmFHVJzXpXSjWrKkLFBkn'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'KCx_NtZvQtlhP19EGbbzqs_NtMcTVI7jAvXrqExsINGWE9WPiuAOefIch-1RaG-A7d5EC6yj-hNwyDlvgxey-J3R55XIdXBf'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9K4YPDM9WaZDixD23rKQtx84dp18oCz6Jner3rahwydQYffZmzu3QTDbJ3f2qv-OY_PNL_OoCZDlr4M7GX0KSwS72'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'IKvqxux0hy4dg5tvg-WcRuGZWHLIp1GL-WbBAcRvH51ce9kCmD0rfnyhlmlDSq5AQ7w8d_nVLNGhY863ivnE1mEBtCUoTw_A4JvXRS-68B-1DdTJRYCVnxrz'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bHh5dbd1osXjK82rUpP_Umcgah8Lb7BD-5Bw9n65JeTV3Am4Nlmia3-h3CK18P57ReF1sUhT72WdUU5Lac1iAdRXRxX-HS7eocJy2qK-8ROzw8jUArW3jA_0'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWjuuNu35yzu7QzXsNqwwYHQSSjG4friAqQ2dPfOCO_flH6F5hXUgaq8U-ix-_nbAl'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'dGXwre0Htzeehvs3u7uJiZwvRJIj-xPWX1wrnMz5ukQCdL_heouBDsv-mAywbQ8ZUXQ8vZgiyHQ7hYqEk9knFwDOMiPFZKwd'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '9bc4jFQ1wm6hbZy0UKnLx8pmBr3l-fVS7eC3WS1V1JSFLDleNper3_z940xvw2rhY3Ya7-7GWNGqg6w-3tH1hDWLe6rAOUi9'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '4ut0_N7hh8afaBQZyioW0FforJqZETb8Kz_eSBuQbH3Pq4vZhuy4EHem62H48fQjW7FgFyY3N2WP3YSyuAVB-fmqkRpghO63'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'UtucipB50W2uxGG7LOhFx3llhFF82JCk74Z4E4Yx55ykYDwllNofM_zh4v1dDzmL1lhBjA7t_ycHrBwFbqul0epYrAiBCRVc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '<unreadable>'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9K4YPDM9WaZDixD23rKQtx84dp18oCz6Jner3rahwydQYffZmzu3QTDbJ3f2qv-OY_PNL_OoCZDlr4M7GX0KSwS72'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9F2BMA9rgJiBS8BYk3-6T6Ub4GUNge16KHRz_8wfxOtLoXMRcg9NdOHT70Qgcq_wV1cRRo0fMKHpgmHonC1Ty6Uh_'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9K4YPDM9WaZDixD23rKQtx84dp18oCz6Jner3rahwydQYffZmzu3QTDbJ3f2qv-OY_PNL_OoCZDlr4M7GX0KSwS72'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'xP5r-n-DdXbmqwzTrhJT5iFWdl7qgRrshbuTANR9X5a0GL73YpunMCLFFCUNjqaLg8RalMgtt9etmFHVJzXpXSjWrKkLFBkn'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'KCx_NtZvQtlhP19EGbbzqs_NtMcTVI7jAvXrqExsINGWE9WPiuAOefIch-1RaG-A7d5EC6yj-hNwyDlvgxey-J3R55XIdXBf'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9F2BMA9rgJiBS8BYk3-6T6Ub4GUNge16KHRz_8wfxOtLoXMRcg9NdOHT70Qgcq_wV1cRRo0fMKHpgmHonC1Ty6Uh_'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9K4YPDM9WaZDixD23rKQtx84dp18oCz6Jner3rahwydQYffZmzu3QTDbJ3f2qv-OY_PNL_OoCZDlr4M7GX0KSwS72'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'xP5r-n-DdXbmqwzTrhJT5iFWdl7qgRrshbuTANR9X5a0GL73YpunMCLFFCUNjqaLg8RalMgtt9etmFHVJzXpXSjWrKkLFBkn'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'KCx_NtZvQtlhP19EGbbzqs_NtMcTVI7jAvXrqExsINGWE9WPiuAOefIch-1RaG-A7d5EC6yj-hNwyDlvgxey-J3R55XIdXBf'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9F2BMA9rgJiBS8BYk3-6T6Ub4GUNge16KHRz_8wfxOtLoXMRcg9NdOHT70Qgcq_wV1cRRo0fMKHpgmHonC1Ty6Uh_'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'kHopwTH21-WTdcKEf7ZxiW0-mXI1MQP9K4YPDM9WaZDixD23rKQtx84dp18oCz6Jner3rahwydQYffZmzu3QTDbJ3f2qv-OY_PNL_OoCZDlr4M7GX0KSwS72'...
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'xP5r-n-DdXbmqwzTrhJT5iFWdl7qgRrshbuTANR9X5a0GL73YpunMCLFFCUNjqaLg8RalMgtt9etmFHVJzXpXSjWrKkLFBkn'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'KCx_NtZvQtlhP19EGbbzqs_NtMcTVI7jAvXrqExsINGWE9WPiuAOefIch-1RaG-A7d5EC6yj-hNwyDlvgxey-J3R55XIdXBf'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'UtucipB50W2uxGG7LOhFx3llhFF82JCk74Z4E4Yx55ykYDwllNofM_zh4v1dDzmL1lhBjA7t_ycHrBwFbqul0epYrAiBCRVc'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'w3f8AjYWcZYtzHLtsJrh-9OiROhNa0b10Iic--jYdXIaNgsSunm26WQdfWwApWrvVGCJhvtmOY7RyylohXe39boQL8QuR_KbqISjZYc-owcSk_TsmXgktk3y'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bt9YKc6bx4e5CfHG_rfIEyIT0_h9zY5HslcgOCnWYy8LcRnhqbT1CmlSiZAZkxdO9m_58Ny7izjvtZosUrD9wNfFZoSLu31h'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'qi0hpZL64DClKJQJ6OX2ix48CS5O1H7kLy3a4NXW8eXVKh0XHLk8wa1W_f32nzJNLRhPf1S6z3B7xvyHIk7QSwTVTHeuHlJ4'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '89Bu-UYeKXQSM8mNNVpZECICJJSwmd-cKr33R-2KStv1HJNxKSxuLLeDojIq97LSgwg6vuBMubR1gGO7dKNIV0EsX838bl6wr84AXQYY_fnGPqeKI8D_RJFh'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '89Bu-UYeKXQSM8mNNVpZECICJJSwmd-cKr33R-2KStv1HJNxKSxuLLeDojIq97LSgwg6vuBMubR1gGO7dKNIV0EsX838bl6wr84AXQYY_fnGPqeKI8D_RJFh'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'w3f8AjYWcZYtzHLtsJrh-9OiROhNa0b10Iic--jYdXIaNgsSunm26WQdfWwApWrvVGCJhvtmOY7RyylohXe39boQL8QuR_KbqISjZYc-owcSk_TsmXgktk3y'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bt9YKc6bx4e5CfHG_rfIEyIT0_h9zY5HslcgOCnWYy8LcRnhqbT1CmlSiZAZkxdO9m_58Ny7izjvtZosUrD9wNfFZoSLu31h'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'qi0hpZL64DClKJQJ6OX2ix48CS5O1H7kLy3a4NXW8eXVKh0XHLk8wa1W_f32nzJNLRhPf1S6z3B7xvyHIk7QSwTVTHeuHlJ4'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '1GkuVop1rvq34GO1_BXFGhwiYUPKy8yBf-4y741KZd2RZDuP8muEzK1tT6n4e0MhAt1-SJDt1wd0W2iC92Ni1UpDSH4f_Ckg'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '61AQpsKGkXODvH0KrsPqbhURW4QJ77ysdYVytYXQWy0MLoU4TJCvCJGiW5XU2BoH13vkyTLr5Yak7qyPi1wpUIUrAe8QxT0i'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'mTVJYbvDW9lOLm5L8TYUnLSFeNgX3PhutKIQe12yzdrtGfLAwAohrlzzeML4pIfne07MsXuRsM4mtKF4U4YdfK5KBpvQeqFZqTbCoxVETB05uiQysXteCvi3'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '1PSJqWO76Y__bguMIQ9BUPyN15ZaLEDuqKQ9xYlSlt31BwJtUFjBuPwLT584me3zoeKvdmJXV3mzA3h0EMf6VNh5gM1shbXG'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '0Lj7zFL0ctF4aTjultpqW_7QxUTF-WslqrFMToOv2cs_-C57aKgv9h2oyl36E02DksGFLsz-tNnTmnpdnKyWYOJ6xWL_Wc0p'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '247RwHR88CfK_jfn35nj0uMyy0Vz6MCTIcdtEp8l_5DpHyjJxNzxjRb571mDdD6hC3GdYkLtF1zBC7s0IWVDskTXr1M25U_Gbn8aRc2rTI4F4P0ZIH95Lv1Y'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '247RwHR88CfK_jfn35nj0uMyy0Vz6MCTIcdtEp8l_5DpHyjJxNzxjRb571mDdD6hC3GdYkLtF1zBC7s0IWVDskTXr1M25U_Gbn8aRc2rTI4F4P0ZIH95Lv1Y'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'mTVJYbvDW9lOLm5L8TYUnLSFeNgX3PhutKIQe12yzdrtGfLAwAohrlzzeML4pIfne07MsXuRsM4mtKF4U4YdfK5KBpvQeqFZqTbCoxVETB05uiQysXteCvi3'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '1PSJqWO76Y__bguMIQ9BUPyN15ZaLEDuqKQ9xYlSlt31BwJtUFjBuPwLT584me3zoeKvdmJXV3mzA3h0EMf6VNh5gM1shbXG'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '0Lj7zFL0ctF4aTjultpqW_7QxUTF-WslqrFMToOv2cs_-C57aKgv9h2oyl36E02DksGFLsz-tNnTmnpdnKyWYOJ6xWL_Wc0p'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '0Lj7zFL0ctF4aTjultpqW_7QxUTF-WslxzB5UQrpKloqxnqMGSs-wRpZOTOc04-ccMr5iXnq5UZ2bfqa08m8hdfsCmJT-o9v'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'NhYiV01UuVxnpdH4p0sbvUW_YtnDYGG0mA3ckZDCRCDGX01m-3eOLSIWcCYItpQ3nrb-kyURcet1n0RewI0E9MX0EikHpZkm'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'a75wNkuXpp0iECkQem-vIfq1K1Du0G5Ff2JwvTBPFzhexstQ61BY1FDJDyjWwyuDL_QthbEACd5OYxNWuC1-fyRyDVJtuDxNEAwlodqTMBFv5WKX66cu2DF2'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'AbMq4_OXK2AZzrv93f6VdTpea4IBXzne3M_4t1HWvOHeirZatJoltdKbksR7vcM-GkxpZTcnr-pGp12u70ImAsrg-dZAg3yP'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'AbMq4_OXK2AZzrv93f6VdTpea4IBXzneJSPIYgXD14LiDKiq9Gd7Y4L3tvD_BPKw-cB_DtbBrCiqW6wwc4KSwIoCatvCrRD0'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '-Cvp4PMJCXZoNqWUz1fF3KhQGknePGogMsAO0U7MbIxyUufDvyJKYThj4rNTTObgPvNCQLQFiItIfXrXSklgOk493RhNCIdKsiuPc10AuK6BuL2oHu7nJLAU'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '-Cvp4PMJCXZoNqWUz1fF3KhQGknePGogMsAO0U7MbIxyUufDvyJKYThj4rNTTObgPvNCQLQFiItIfXrXSklgOk493RhNCIdKsiuPc10AuK6BuL2oHu7nJLAU'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'a75wNkuXpp0iECkQem-vIfq1K1Du0G5Ff2JwvTBPFzhexstQ61BY1FDJDyjWwyuDL_QthbEACd5OYxNWuC1-fyRyDVJtuDxNEAwlodqTMBFv5WKX66cu2DF2'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'AbMq4_OXK2AZzrv93f6VdTpea4IBXzne3M_4t1HWvOHeirZatJoltdKbksR7vcM-GkxpZTcnr-pGp12u70ImAsrg-dZAg3yP'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'AbMq4_OXK2AZzrv93f6VdTpea4IBXzneJSPIYgXD14LiDKiq9Gd7Y4L3tvD_BPKw-cB_DtbBrCiqW6wwc4KSwIoCatvCrRD0'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'Dn0W7DRLMqK6SDypaIkq2x6mr2C_kwrkLy7x3oXO25oFTkaxAqxzuNpc6gAFK15OziDNKgNp6rQ-Ymxr1CXi2pqob6-_kXh-'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'sSwJwxxYnNzrguKJdFh8TolIVtYpHDK2FsVwS7WNHSzlgj8vq4IunfXfEp0tG_lGCPVLz2SfflwLYaJlJCvRzs4dNuwa4xuy'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BuoT_E6wodzw03Cyu1ERwxjGIFUX_qxf6C7-IOK6caRX2Cf91neZLRrcrN0aN2ZTRyq6L3E2hqZFrtKRuh1ie0pKu8XIlFooBWnhgtTfd7pP7qIBkgGiP5IE'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'gaUaE28KB9W8-e6oRoimrtnm2g5KEGh83UTk-RkLDQuWHBh6n_wvqfcfNlSosoPBSG8hAQDcNVvWErYLOOVIC32O-NAx4vgE'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'gaUaE28KB9W8-e6oRoimrtnm2g5KEGh8_jvQf_LIPW9y2t4m3jgKvrU4xEeMpJO61ZgsFB_G7bKSW98huSoLgMN1J6E7T3KA'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'ZsI1KKZnVZcDsPOv75gqMXyajwbFvq4TGHcg0j2LKehoJbK56BT-8E7S-MXJcoS6FMLSgOdqTJkPaETvksDcsGKye97VJue10q2xSPQYZg4wZ8U5hf5OckaC'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'ZsI1KKZnVZcDsPOv75gqMXyajwbFvq4TGHcg0j2LKehoJbK56BT-8E7S-MXJcoS6FMLSgOdqTJkPaETvksDcsGKye97VJue10q2xSPQYZg4wZ8U5hf5OckaC'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BuoT_E6wodzw03Cyu1ERwxjGIFUX_qxf6C7-IOK6caRX2Cf91neZLRrcrN0aN2ZTRyq6L3E2hqZFrtKRuh1ie0pKu8XIlFooBWnhgtTfd7pP7qIBkgGiP5IE'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'gaUaE28KB9W8-e6oRoimrtnm2g5KEGh83UTk-RkLDQuWHBh6n_wvqfcfNlSosoPBSG8hAQDcNVvWErYLOOVIC32O-NAx4vgE'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'gaUaE28KB9W8-e6oRoimrtnm2g5KEGh8_jvQf_LIPW9y2t4m3jgKvrU4xEeMpJO61ZgsFB_G7bKSW98huSoLgMN1J6E7T3KA'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bomX1Fkym2NeUGQRJfUEKADF718b2ifji5uWK3k4MJLuTcw-09cftGZcOv7y88j8_V70MJfIeF35g6dvIlPR9374aD3Qx0ah'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'n-BibM7DDnNJq54bZsn-D7fVDEl6KeF_292Ly4D_kimMmREUiZ_FzmFzblXa6wQv7obM4iWDtxZ4ZE2j2R3ZyL3lAOQcnCwf'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'QMq7k2HwE48Na4uxDtptjzMorNTnshjTkFzz9hBkiMay71pI63N3AX31BqvWGhu-XhNpRqmBNhyX1gnj5ssIT1i_KRX3BdYgLTYBe0ICuzLFmrxkSC8b1LMp'...
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'QMq7k2HwE48Na4uxDtptjzMorNTnshjTQ3Ezuf2dhtrgDs8LrYaDj_GMAWCOht8DLGDreocfemTzz28ByWkqd_qj24GPelYo9gbl31FowO59Y47rYg8FVYQZ'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'QMq7k2HwE48Na4uxDtptjzMorNTnshjTkFzz9hBkiMay71pI63N3AX31BqvWGhu-XhNpRqmBNhyX1gnj5ssIT1i_KRX3BdYgLTYBe0ICuzLFmrxkSC8b1LMp'...
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'S6qJLjon_4HN__AR1wzAEuJjz4yskXo4Q0bGlkLyvujrZcx9XYqOkHGecpDpB8OB0D6DFss-QQFK-My6i3QvZTHeLecUDal4'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'jp8oSCPQ-RpqnlCQ73lXFr2O8eJP5XoXuhZqI5ixBFzUqkr0vGuv8bHX_4leOVmwtfUPd9QIHzgNz_BJW5V_ZkNfYdUFkySm'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'jp8oSCPQ-RpqnlCQ73lXFr2O8eJP5XoXYFHvyf0RYkqwmUPkVJWyjI7Gy3kG7aocfXQEHoagNJb8IuJJD8EAig0f2CvBK60q'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '_cyVzpbaP-E2y4FRl-M4emfVpM_kV1PUu4Lepm-GYH3yFNgA8wPriMhz9twwBMv3kDtXfvA5-dsZY7n4MIG5HULAYNAxfA7C'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '6td8clMKk2M3Q5Cz6sc9lYDiQvKC0mmc1xQjPeZPKRnPst4g06bfhyt9GFr3K6_d4vvF49HY4PVxCU9TdhD6NDH08nsA14Es'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '6td8clMKk2M3Q5Cz6sc9lYDiQvKC0mmc-hkUrWL6QXw3lirwEvklBiTM2DD6q3-ri1zrWsrGxXiGCGUQVBkOdfKTeZ-g813U'
+
+--- decrypt_string @ 0x7fffec87e540  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libpdc.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'sDybFdCczI_6-NMPc2609W2a0gVWVtZz8HLGWFhGSCsGdUzH3IKgiGEBoteW08liG3nuCTiGX0bReAXwgNXsRLaRoFDU4Tk_D83mtT-XpaGVzRY0uWa8Qw'
+
+--- decrypt_string @ 0x7fffed4824d0  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdisplay.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'BcwUaefU6vjjsxuV6mnoM7rPbUl1zvvkW3RKdMU6lPCanH-n1PXpaIWGiLEhYy9osw8tSZizaWtj2sU2STstszAiVI6ciZPc'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'w3f8AjYWcZYtzHLtsJrh-9OiROhNa0b10Iic--jYdXIaNgsSunm26WQdfWwApWrvVGCJhvtmOY7RyylohXe39boQL8QuR_KbqISjZYc-owcSk_TsmXgktk3y'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bt9YKc6bx4e5CfHG_rfIEyIT0_h9zY5HslcgOCnWYy8LcRnhqbT1CmlSiZAZkxdO9m_58Ny7izjvtZosUrD9wNfFZoSLu31h'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'qi0hpZL64DClKJQJ6OX2ix48CS5O1H7kLy3a4NXW8eXVKh0XHLk8wa1W_f32nzJNLRhPf1S6z3B7xvyHIk7QSwTVTHeuHlJ4'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '89Bu-UYeKXQSM8mNNVpZECICJJSwmd-cKr33R-2KStv1HJNxKSxuLLeDojIq97LSgwg6vuBMubR1gGO7dKNIV0EsX838bl6wr84AXQYY_fnGPqeKI8D_RJFh'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '89Bu-UYeKXQSM8mNNVpZECICJJSwmd-cKr33R-2KStv1HJNxKSxuLLeDojIq97LSgwg6vuBMubR1gGO7dKNIV0EsX838bl6wr84AXQYY_fnGPqeKI8D_RJFh'...
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'w3f8AjYWcZYtzHLtsJrh-9OiROhNa0b10Iic--jYdXIaNgsSunm26WQdfWwApWrvVGCJhvtmOY7RyylohXe39boQL8QuR_KbqISjZYc-owcSk_TsmXgktk3y'...
+
+--- load() @ 0x7fffed8db5f0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libdevices.so)
+  [data, size]: rdi=0x7fffe01350c0  size=18
+  head        = f8b7fd21e03222b8a9e87c110494e29d9f6a
+  ascii       = '���!�2"���|\x11\x04����j'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'bt9YKc6bx4e5CfHG_rfIEyIT0_h9zY5HslcgOCnWYy8LcRnhqbT1CmlSiZAZkxdO9m_58Ny7izjvtZosUrD9wNfFZoSLu31h'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = 'qi0hpZL64DClKJQJ6OX2ix48CS5O1H7kLy3a4NXW8eXVKh0XHLk8wa1W_f32nzJNLRhPf1S6z3B7xvyHIk7QSwTVTHeuHlJ4'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '1GkuVop1rvq34GO1_BXFGhwiYUPKy8yBf-4y741KZd2RZDuP8muEzK1tT6n4e0MhAt1-SJDt1wd0W2iC92Ni1UpDSH4f_Ckg'
+
+--- decrypt_string @ 0x7fffed07f660  (decrypt_string(char const*, char const*) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  passphrase = 'Wistron@U4025QW'
+  encrypted  = '61AQpsKGkXODvH0KrsPqbhURW4QJ77ysdYVytYXQWy0MLoU4TJCvCJGiW5XU2BoH13vkyTLr5Yak7qyPi1wpUIUrAe8QxT0i'
+
+--- load() @ 0x7fffed0aa9c0  (load in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  [data, size]: rdi=0x7fffe01bbb50  size=71848
+  head        = 0401f3d6f8cc33fdc53d101d0c0b90a377cc55f3560f81f1babe2fd6aa76d44d78d153c2ba6d3aebcf562bfc35cec503aa2bb541aff2a29564db2c581ca964a4
+  ascii       = '\x04\x01����3��=\x10\x1d\x0c\x0b��w�U�V\x0f����/��v�Mx�S��m:��V+�5��\x03�+�A����d�,X\x1c�d�'
+  full → /agents/ada/projects/dell-u4025qw-fw/captures/load-data-7fffed0aa9c0-sz71848.bin  sha256=a5134c1b31dd9e9bb957f03e7b804512d816099dc554547a1dd44d54e3ba434a
+
+--- load() @ 0x7fffed09b250  (Rts5409s_IIC_ISP::load(std::vector<unsigned char, std::allocator<unsigned char> > const&) in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+  [self, vector]: self=0x7fffe0198e60  data=0x7fffe039e660  size=131072
+  head        = 02088b02208000f7ffee01026c3222022079ff0237fd022079ffff026a6a9056e47440f022e4fdff026d4f026ff8ffffffffff023ff70203f7e86480f8e933e8
+  ascii       = '\x02\x08�\x02 �\x00���\x01\x02l2"\x02 y�\x027�\x02 y��\x02jj�V�t@�"���\x02mO\x02o������\x02?�\x02\x03��d���3�'
+  full → /agents/ada/projects/dell-u4025qw-fw/captures/load-vec-7fffed09b250-sz131072.bin  sha256=9af181220635df56604dc57b49f472ec7faa1eba95402baee3f05fff499730d4
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!! PANIC HOOK fired: Rts5409s_IIC_ISP::isp — TOP-LEVEL UPDATE ENTRY
+!!! pc = 0x7fffed09bd30  (Rts5409s_IIC_ISP::isp() in section .text of /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so)
+backtrace at panic:
+  #0  0x00007fffed09bd30 in Rts5409s_IIC_ISP::isp() () from /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so
+  #1  0x00007fffed09c37d in Rts5409s_IIC_ISP::check_start(bool) () from /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so
+  #2  0x000055555577c073 in ?? ()
+  #3  0x0000555555754334 in ?? ()
+  #4  0x00005555555eef89 in ?? ()
+  #5  0x00005555555fec7f in ?? ()
+  #6  0x00007ffff74ed064 in execute_native_thread_routine () from /lib/libstdc++.so.6
+  #7  0x00007ffff709a97a in start_thread () from /lib/libc.so.6
+!!! AUTO-KILLING inferior to prevent device write.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
