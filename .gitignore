@@ -1,3 +1,18 @@
+# The Dell installer .deb is re-downloadable from dl.dell.com — see
+# Dell_U4025QW_FirmwareUpdate_Instruction_Ubuntu_A00.pdf inside the
+# .deb (or PLUGIN_NOTES.md) for the URL pattern. Not committed to keep
+# the repo small (and history-rewritten out of older commits 2026-05).
+U4025QW_M3T105.deb
+*.deb
+
+# Wire-protocol pcaps are large (≥10 MB) and contain the same payloads
+# the decompiled C and PLUGIN_NOTES.md reference — re-record with
+# Wireshark + USBcapture if you need to replay. History-rewritten out
+# of older commits 2026-05 (the main update pcap also exceeds GitHub's
+# 100 MB hard limit).
+captures/*.pcapng
+captures/*.pcap
+
 # Reconstructible from U4025QW_M3T105.deb via dpkg -x / -e
 extracted/
 extracted-control/
