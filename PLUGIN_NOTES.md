@@ -376,19 +376,116 @@ services.udev.packages       = [ pkgs.mynix.fwupd-plugin-dell-monitor-rt ];
 These are the gaps between "we have a clear protocol picture" and "we can
 ship a plugin." Each section gets filled in as work progresses.
 
-### Disassembly of `librtburn.so` to confirm opcode names
+### Disassembly findings — protocol architecture is layered C++
 
-> Goal: walk each `hid_*` function, identify which `bmRequestType / wValue /
-> wLength` SETUP it emits and which 192-byte payload it builds, then bind
-> a human-readable name to every opcode in the histogram above.
+Initial assumption ("the protocol is in `librtburn.so`") was **wrong**.
+Disassembly revealed the real picture:
 
-- [ ] `hid_GetUSBFwVersion` → opcode `?`
-- [ ] `hid_fwUSBBootloader` → opcode `?`
-- [ ] `hid_fwUpdateUSB` chunk format (header layout for `40 f1 …`)
-- [ ] `hid_GetUSBUpdateFWProgress` response interpretation
-- [ ] `EraseBank` and the `script_*` constants (precanned byte sequences?)
-- [ ] `hid_CheckECDSA` — input format and which key is used to verify
-- [ ] `hid_fwReboot` — exact opcode and post-reboot timing
+#### `librtburn.so` is for the Dell webcam attachment, not the monitor
+
+- `hid_GetUSBFwVersion` dispatches on VID `0x413c` (Dell) and PIDs `0xc068`/
+  `0xc06c` — those are the Dell C-series webcam attachment, not the U4025QW
+  hub. So `librtburn.so` flashes the *peripheral* via direct USB HID,
+  not the scaler.
+- Confirmed opcodes from `librtburn.so` for the webcam path:
+  - `hid_fwGetVersion`: sends `<id> 10 00 …` (8-byte report)
+  - `hid_fwUSBBootloader`: sends `<id> 02 00 …` then closes the device
+  - `hid_fwUpdateUSB`: sends `<id> a2 00 …` to begin the update
+  - `hid_fwReboot`: sends `<id> a8 00 …`
+  - `HID_WriteI2C` (I²C tunnel for *the webcam chip*): sends
+    `00 00 57 <subcmd> <len> <data…>`  ('W' = 0x57)
+- None of these opcodes match anything seen on the wire during the
+  U4025QW update. Confirms `librtburn.so` is a different code path.
+
+#### The U4025QW path is in `libhub.so`, layered C++
+
+```
+plugins/libhub.so:
+  ┌─ FL5500_IIC_ISP            high-level: update_hub, isp, terminate_isp,
+  │    └── FL5500_IIC_API           mid-level: read_byte, write_byte,
+  │                                  write_burst, bit_polling,
+  │                                  set_sram_*, sram_to_spi_flash,
+  │                                  trigger_write_spi_flash, …
+  │           └── IIC_INTF              abstract I²C interface base class
+  │                  ├── Rts5409s_IIC_ISP    ← concrete: RealTek RTS5409S USB hub
+  │                  ├── Rts5418e_ISP            (other RealTek hub model)
+  │                  ├── Mchp58xx_72xx_ISP       (Microchip USB hubs)
+  │                  ├── PS5512_IIC_ISP          (PS5512 hub)
+  │                  └── …
+  │
+  └─ RTS5409s_IIC_API           hub-MCU-specific ops: write_flash,
+                                 read_fw_version, polling_status,
+                                 verify_fw, soft_reset, clear_address
+```
+
+- **`FL5500`** is the RealTek scaler IC family inside the monitor.
+- **`RTS5409S`** is the upstream USB hub MCU inside the monitor; it's
+  the device that exposes `0bda:1100`/`1101` and acts as the I²C bridge.
+- The host talks HID-class control transfers to the RTS5409S, which
+  forwards I²C transactions to the FL5500 scaler over an internal bus.
+- The 192-byte HID Output Reports we observed are
+  **I²C transactions tunnelled through HID**, with the leading byte
+  serving as the direction marker (`0x40` = host writes I²C, `0xc0` =
+  host reads I²C status).
+- The 13,312-call write loop `40 f1 80 XX` we observed corresponds to
+  the SRAM-staged flash write pattern in
+  `FL5500_IIC_API::sram_to_spi_flash` — the host writes 184-byte chunks
+  into the FL5500's SRAM via I²C, then triggers the SRAM→SPI-flash copy.
+- The 87,352 `c0 f3` polls correspond to
+  `RTS5409s_IIC_API::polling_status` (also called by `FL5500_IIC_API::
+  bit_polling` over I²C).
+
+#### Implications for the fwupd plugin design
+
+The plugin should mirror the real layering:
+
+```
+fu-dell-monitor-rt-device.c       (FuHidDevice subclass)
+   │   - opens /dev/hidraw matching 0bda:1100/1101
+   │   - exposes plain SET_REPORT/GET_REPORT helpers
+   │
+   ├─ fu-iic-tunnel.c             (HID-encoded I²C transport)
+   │   - encodes I²C ops as 192-byte Output Reports
+   │     (0x40 prefix = I²C write, 0xc0 = I²C read)
+   │   - matches Rts5409s_IIC_ISP on the device side
+   │
+   ├─ fu-rts5409s-flash.c         (hub-MCU flash ops if we ever update it)
+   │   - write_flash, polling_status, soft_reset, …
+   │
+   └─ fu-fl5500-isp.c             (scaler ISP — the main payload path)
+       - SRAM staging: set_sram_page, set_sram_start_addr,
+         write_burst (host→SRAM)
+       - flash trigger: set_spi_flash_start_addr,
+         set_spi_flash_transfer_size, trigger_write_spi_flash
+       - completion: bit_polling on done bit, verify_fw
+       - high-level: update_hub() = the full erase→write→verify flow
+```
+
+This is *cleaner than initially expected*: `realtek-mst` (existing fwupd
+plugin) already implements similar SRAM-staged SPI flash logic for
+RTD2141B/RTD2142 over the DisplayPort aux channel. We can crib the
+flash-protocol structure from there and just swap the transport
+(DP-aux → HID class control transfers).
+
+#### Open follow-ups for this section
+
+- [ ] Decode the precise byte layout of `IIC_INTF::write(reg, addr, buf)`
+      → 192-byte report (i.e., where in the report each I²C-level field
+      lands). Currently a hypothesis: byte 0 = direction, byte 1 = reg,
+      bytes 2-3 = addr (big-endian), bytes 4+ = data. Need to confirm
+      against captured frames.
+- [ ] Identify which opcodes correspond to the bootloader-enter
+      command (`04 08 02 00 01` with cmd-class `0x04`). Likely a
+      `RTS5409s_*` method, possibly outside `_IIC_API` (different
+      transport for the hub-itself entry vs. the scaler updates).
+- [ ] Confirm the `40 d6 …` family maps to `bit_polling` operations
+      against specific FL5500 status registers.
+- [ ] Walk `FL5500_IIC_ISP::isp()` end-to-end to extract the canonical
+      flash sequence and align it with the per-phase pcap timeline.
+- [ ] Identify which other hub-IC classes (`Mchp58xx_72xx_ISP`,
+      `PS5512_IIC_ISP`, `Rts5418e_ISP`) ship in libhub.so and might
+      give us "free" support for other Dell monitor models that share
+      this Wistron updater architecture.
 
 ### Per-phase timeline of the captured update
 
