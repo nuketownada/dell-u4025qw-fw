@@ -838,20 +838,143 @@ Inter-arrival of consecutive `c0 f3` polls during the write phase
       (the `04 08` recipient). Is this a separate USB function on the
       same physical device? An IAD-grouped sibling?
 
-### `.upg` format details
+### `.upg` format — parser spec
 
-- [ ] Exact location of each component's binary payload within the file
-      (where do the ASCII signature blocks end and binary bytes begin?)
-- [ ] Which records correspond to the `HUB*`, `PDC`, `DISPLAY`, `DISPLAY`
-      (twice) component sections? Are HUB1/2/4 sub-firmwares of the
-      USB hub MCU, or different physical devices on the monitor?
-- [ ] What is the trailing `UPDATE_BY_SCALER` record telling the
-      updater? A delivery-method discriminator (write via scaler vs
-      via dedicated MCU)?
-- [ ] What hashes/keys do `cert.dat` (18 bytes) and `cert2.dat`
-      (26 bytes ASCII) encode?
-- [ ] What is in `appconfig.dat`? Is it actually encrypted or just
-      a binary structure with no ASCII?
+Walked the file structurally; here is the binding spec the plugin's
+`FuFirmware` subclass needs to implement.
+
+#### Top-level layout
+
+All length-prefixed strings are `u32 BE length` followed by bytes.
+
+```
+offset       size           field
+─────────────────────────────────────────────────────────
+0x000000     4              magic length = 3
+0x000004     3              "UPG"
+0x000007     4              format version length = 5
+0x00000B     5              "1.0.6"
+0x000010     4              product length = 7
+0x000014     7              "U4025QW"
+0x00001B     4              firmware version length = 6
+0x00001F     6              "M3T105"
+0x000025     4              component count   (= 6 for U4025QW LGD)
+0x000029     —              component-name table (6 entries):
+                              u32 BE length + ASCII name
+                              ─────────────
+                              len=4 "HUB1"
+                              len=4 "HUB2"
+                              len=4 "HUB4"
+                              len=3 "HUB"
+                              len=3 "PDC"
+                              len=7 "DISPLAY"
+0x00005A     —              per-component sections begin (see below)
+                            … binary payloads + signatures …
+last 96 B    96             trailing 96-byte base64-url-safe signature
+                            (file-level — likely covers the whole image)
+```
+
+#### Per-component section structure (preliminary, needs runtime verification)
+
+Right after the component-name table, each component contributes a
+section that contains:
+
+- A small leader (`u32 = 1` followed by one zero byte appears at the
+  very start of the section block — purpose unknown, possibly section
+  count or spec version)
+- A length-prefixed component name re-emitted (re-binds payload to
+  component identity)
+- A small `u32` (commonly 7 in this file) — looks like a "subrecord
+  count" for what follows
+- One or more 96-byte base64-url-safe signature blobs (each preceded
+  by `u32 = 0x60`); these are very likely raw-encoded SHA-384 ECDSA
+  signatures, one per signed sub-image
+- The binary firmware payload bytes for the component
+
+Note the file's payload bytes (~1.1 MB total) are interleaved with
+these per-component metadata records, not contiguous at the end.
+A complete byte-by-byte map per component is the next investigation
+step.
+
+#### Component → plugin → ISP-class dispatch
+
+Every plugin `.so` exports the same set of "module interface" symbols
+(`register_module`, `load`, `start`, `stop`, `set_chunk_size`,
+`get_fw_version`, `set_message_callback`, …). The main `Firmware
+Updater` binary owns the dispatcher: it iterates the .upg's component
+names and routes each one to the matching plugin instance, calling
+`plugin->load(component_bytes)` then `plugin->start()`.
+
+Mapping from .upg component names to plugin/ISP class:
+
+| .upg name | Plugin .so | Concrete ISP class |
+|-----------|-----------|--------------------|
+| `HUB`     | `libhub.so` | `FL5500_IIC_ISP` (the scaler MCU's flash) |
+| `HUB1`, `HUB2`, `HUB4` | `libhub.so` | `Rts5409s_IIC_ISP` (sub-flashes of the upstream hub MCU) |
+| `PDC`     | `libpdc.so` | `RTS545X_ISP` (USB-PD controller) |
+| `DISPLAY` | `libdisplay.so` | `RealtekISP` (panel scaler / TCON) |
+| `BRIDGE`  | `libbridge.so` | `RTD2176_ISP` |
+| `WEBCAM`  | `libwebcam.so` | `SigmaStar_Camera_ISP` (Dell C-series webcam attachment) |
+| `AUDIO`   | `libaudio.so` | `ALC4058_ALC5576_ISP` / `CX20889_ISP` |
+| `TOUCH`   | `libtouch.so` | `FlatFrog_Touch_ISP` |
+| `TBT`     | `libtbt.so` | `GoshenRidge_ISP` / `TitanRidge_ISP` |
+| `MCU`     | `libmcu.so` | `NUC125_ISP` |
+
+For the U4025QW (LGD panel) M3T105 .upg the active set is:
+`HUB1`, `HUB2`, `HUB4`, `HUB`, `PDC`, `DISPLAY`. The minimum viable
+plugin that successfully reflashes the monitor needs to handle at
+least `HUB` (FL5500 scaler) and `DISPLAY` (panel scaler); the
+`HUB1/2/4` records appear to be sub-flashes within the hub MCU and
+likely route through the same `Rts5409s_IIC_ISP` instance with
+different bank IDs. `PDC` is a separate MCU and may not be strictly
+required for every update — needs runtime verification.
+
+#### Bootloader-enter — provisional answer
+
+The exact USB-level bootloader-enter command isn't precisely
+identified yet. Two leads:
+
+1. **`RTS5409S_HID::send_vendor_cmd(buf, name)`** with the named
+   command `"enable_vdcmd"` — sends opcode `0x02` in our wire format.
+   This opcode IS what we observed in the pcap at the start of the
+   update sequence (frame 7700 onwards) and is the most likely
+   candidate.
+2. The 5-byte CLASS-DEVICE control transfer (`bmRequestType=0x20`,
+   `wLength=5`, payload `04 08 02 00 01`) at frame 45830 to addr 17
+   does NOT match any candidate in the binary. Likely USB-stack
+   overhead (e.g., a hub-class request) rather than firmware-update
+   protocol.
+
+Working hypothesis: **`enable_vdcmd` (opcode `0x02`) IS the
+bootloader-enter on the U4025QW path.** Plugin will start with this
+and adjust based on runtime testing.
+
+The file `/home/vsts/work/1/s/parade_ps5512/ps5512_vdcmd.cpp`
+(the source path leaked in libdevices.so) confirms "vdcmd" =
+"vendor command [protocol]" and is a per-vendor extension to USB-HID.
+
+#### Cert / config files (unchanged from earlier section)
+
+- `cert.dat` — 18 bytes (likely identity hash)
+- `cert2.dat` — 26 bytes ASCII (likely short-form identifier)
+- `appconfig.dat` — 813 bytes (unknown; possibly encrypted config —
+  not strictly needed for the plugin to function since the .upg
+  carries everything)
+
+#### Open follow-ups for this section
+
+- [ ] Walk one component's bytes end-to-end to lock down the
+      per-section layout (HUB1 from offset 0x5A, since it's the
+      first/smallest).
+- [ ] Confirm signature placement and key (Crypto++ ECDSA P-384 is
+      almost certainly the algorithm; `cert.dat`/`cert2.dat` may
+      be the public key fingerprint).
+- [ ] Determine the order in which the dispatcher processes
+      components — left-to-right by name table order, or grouped
+      (HUB-family first, then PDC, then DISPLAY)?
+- [ ] Verify that omitting `PDC` or `DISPLAY` is safe (so the
+      plugin can ship with HUB-only support initially and add
+      others as separate child devices).
 
 ### Device addressing during update
 
