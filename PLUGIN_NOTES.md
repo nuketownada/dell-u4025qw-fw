@@ -392,15 +392,86 @@ ship a plugin." Each section gets filled in as work progresses.
 
 ### Per-phase timeline of the captured update
 
-> Slice the pcap (`/agents/ada/projects/dell-u4025qw-fw/captures/u4025qw-m3t105-update-171436.pcapng`)
-> by frame ranges and label each phase. Pcap is 17:54 long, ~900K packets.
+Source: `/agents/ada/projects/dell-u4025qw-fw/captures/u4025qw-m3t105-update-171436.pcapng`
+(17 min 57 s wall time, 901,308 frames; 444,560 bus-3 control transfers).
 
-- [ ] Discovery / version read (frames 1 – ?)
-- [ ] Bootloader transition (which opcode triggers re-enumeration?)
-- [ ] Erase phase (count of `40 d6 …` calls vs flash bank size)
-- [ ] Write phase (frames ~70K – ~870K)
-- [ ] Verify / signature pass
-- [ ] Reboot and re-enumeration (last devices on bus 3)
+#### Top-level structure
+
+| # | Phase | Frame range | Wall time | Active addr | Headline opcodes |
+|---|-------|-------------|-----------|-------------|------------------|
+| 1 | Discovery / version read | 7691 – 14466 | 23.6 s – 60.8 s | 13 | `40 02 01 00`, `40 06 01 00`, `40 e1 01 01`, `40 e1 03 00`, `40 c6 00 00`, `40 d6 00 00`, `40 06 00 00` |
+| 2 | Idle wait (user looks at GUI) | (none) | 60.8 s – 174.6 s | — | **114-second silence** — no bus-3 control traffic at all |
+| 3 | Pre-update setup | 22049 – 45826 | 174.6 s – 215.8 s | 13, 14 (briefly) | `40 d6 80 00`, `40 d6 0f 00`, `40 d6 06 00`, `c0 09 00 00`, `40 d6 2d 00`, `40 d6 f5 00` |
+| 4 | **Bootloader enter** | 45830 | 216.2 s | 17 (one-shot) | `04 08 02 00 01` — single opcode, different cmd-class (`0x04` not `0x40`) |
+| 5 | Re-enumeration burst | 47555 – 70102 | 219.5 s – 250.6 s | 0 → 18 → 28 → 29 → 31 → 32 | Address-0 setups; many devices drop and re-enumerate; settles to the bootloader-mode HID interface at addr 31 |
+| 6 | Header read-back / inventory | 53240 – 65741 | 226.9 s – 243.4 s | 31 | 1,536 `40 c8 …` reads = 3 passes × 256 addresses × 2 flag bits (`00`/`80`) |
+| 7 | **Erase wait** | 72484 – 370798 | 258.1 s – 678.1 s | 31 | 1,840 `40 d6 08 00` + 1,832 `40 d6 09 00` progress polls (~230 ms cadence) — **~7 minutes** of flash erase |
+| 8 | **Write loop** | 371906 – 861324 | 680.0 s – 896.7 s | 31 | 13,312 `40 f1 <flag> <byte>` writes + 87,352 `c0 f3 00 00` status polls (~2 ms tight loop) + 4,196 block commands (`40 d6 60 00`, `40 d6 6f 00`) |
+| 9 | Verify / cleanup | 861324 – 875350 | 896.7 s – 904.7 s | 31 | Trailing `40 d6 …` and `40 c8 …`; final command is `40 c6 00 00 00 00 02 00 94 00 01` at 904.7 s — likely "image complete, reboot" |
+| 10 | Boot-out re-enumeration | 875354 – 883676 | 904.7 s – 940.5 s | 0 → 1 (bus reset path) | Hub-level re-enumeration as the device reboots back into normal mode |
+| 11 | Final settle | 883676 – end | 940.5 s – 1077 s | 1 + others | Devices come back at fresh addresses; closing version-read presumably happens here |
+
+#### Implications for the plugin state machine
+
+1. **Bootloader entry is a single opcode** (`04 08 02 00 01`) sent to the
+   pre-bootloader interface, not the persistent `0x40 …` interface. After
+   this command the host has to wait for a re-enumeration (~3–4 seconds
+   based on the gap from frame 45832 to 47555) and then rediscover the
+   device at its new bus address. fwupd's `FuUsbDevice` already supports
+   "wait for replug" via `fu_device_set_remove_delay()`.
+
+2. **The erase phase blocks for ~7 minutes** with low-rate (~230 ms)
+   polling. The plugin must:
+   - Not assume erase is fast.
+   - Surface progress via the polled status response (the `40 d6 08`/`09`
+     responses presumably encode an "erase percent done" — TBD).
+   - Set `fu_progress_set_steps()` so 70 % of the perceived progress is
+     allocated to erase.
+
+3. **The write phase polls *every 2 ms*** (`c0 f3 00 00`) — that's 500
+   polls/s. The C plugin should match this cadence; longer intervals
+   risk the device buffer filling and stalling. Easy enough with
+   `g_usleep(2000)`.
+
+4. **Re-enumeration count is at least two** — once on entry, once on
+   exit. Address jumps from 13 → 31 (entry) and from 31 → 1+ (exit).
+   The exit path is the one most likely to time out if the plugin
+   gives up too early after sending the reboot opcode.
+
+5. **The reboot/done command is `40 c6 00 00 00 00 02 00 94 00 01`**
+   (or close to it — single instance at frame 875350). The trailing
+   `94 01` might encode the new firmware version it's reporting; need
+   to confirm.
+
+#### Polling cadences observed
+
+- `40 d6 08 00` (erase progress): 1,840 calls over 420 s → mean cadence
+  **228 ms**.
+- `40 d6 6f 00` (write block status): 1,607 calls over 217 s → mean cadence
+  **139 ms**.
+- `c0 f3 00 00` (per-write status): 87,352 calls over 215 s → mean cadence
+  **~2 ms** (tight host-side spin).
+
+Inter-arrival of consecutive `c0 f3` polls during the write phase
+(first 10): 0.5257 s (just after start), then 2.3, 2.2, 2.2, 2.3, 2.2,
+1.8, 1.8, 1.7, 1.8 ms — i.e., the host spins after the first response.
+
+#### Open follow-ups for this section
+
+- [ ] Decode the response payload of `c0 f3` to confirm it's a percent-
+      done counter.
+- [ ] Understand why the read-back phase iterates 3 times over each
+      (address, flag) pair. Hypotheses: triple-read for ECC voting,
+      or read + checksum + meta.
+- [ ] Confirm that `40 c6 00 00 …` at frame 875350 is in fact the
+      "reboot to new firmware" trigger (not just a status read with
+      the new version embedded in args).
+- [ ] Identify the "preflight failed" branches — opcodes the device
+      uses to signal "wrong panel ODM" / "rollback blocked" so the
+      plugin can map them to clean error strings.
+- [ ] Understand the role of the pre-bootloader address-17 interface
+      (the `04 08` recipient). Is this a separate USB function on the
+      same physical device? An IAD-grouped sibling?
 
 ### `.upg` format details
 
