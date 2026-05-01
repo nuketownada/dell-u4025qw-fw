@@ -4,3 +4,12 @@ extracted-control/
 
 # Probe artefacts
 page.html
+
+# Cross-monitor key-comparison .deb files (re-downloadable from dl.dell.com;
+# see comparison/<model>/README.md for URLs). Extracted plugin .so's would
+# be the only useful artifacts and they're easy to regenerate.
+comparison/*/*.deb
+comparison/*/extracted/
+
+# Decryption derivable from `ecies-decrypt` + the captured input blob.
+captures/decrypted-*.bin

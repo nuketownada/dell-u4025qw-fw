@@ -1,0 +1,21 @@
+>>> key-hunter armed: Certify::d + ECIES Decrypt observed (dumps memory
+>>>   around the decryptor object). Mutation panic chain also armed —
+>>>   FIRST device-mutating call halts gdb and auto-kills the inferior.
+>>> log → /agents/ada/projects/dell-u4025qw-fw/captures/key-hunter.log
+>>> dumps → /agents/ada/projects/dell-u4025qw-fw/captures/keyhunt-*
+
+=== Certify::d entered: input vector size=71848
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!! PANIC HOOK fired: Rts5409s_IIC_ISP::isp — UPDATE ENTRY  @ 0x7fffed09bd30
+backtrace at panic:
+  #0  0x00007fffed09bd30 in Rts5409s_IIC_ISP::isp() () from /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so
+  #1  0x00007fffed09c37d in Rts5409s_IIC_ISP::check_start(bool) () from /agents/ada/projects/dell-u4025qw-fw/extracted/usr/share/Dell/firmware/U4025QW/plugins/libhub.so
+  #2  0x000055555577c073 in ?? ()
+  #3  0x0000555555754334 in ?? ()
+  #4  0x00005555555eef89 in ?? ()
+  #5  0x00005555555fec7f in ?? ()
+  #6  0x00007ffff74ed064 in execute_native_thread_routine () from /lib/libstdc++.so.6
+  #7  0x00007ffff709a97a in start_thread () from /lib/libc.so.6
+!!! AUTO-KILLING inferior to prevent device write.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

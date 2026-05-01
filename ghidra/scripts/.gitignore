@@ -1,4 +1,4 @@
-# Build artifacts (regenerate from decrypt-blob.cpp; see README.md).
-decrypt-blob
+# Build artifacts (regenerate from *.cpp; see README.md).
 decrypt-blob
 decrypt-bin
+ecies-decrypt

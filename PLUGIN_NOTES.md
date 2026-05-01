@@ -1315,6 +1315,125 @@ component, which is all our plugin needs to dispatch. See
 "`decrypt_string` — algorithm and passphrase format (CRACKED)" and
 "Per-component metadata" below for the full story.
 
+#### `Certify::d` — binary firmware payload encryption (CRACKED)
+
+The actual firmware binaries inside each .upg component (the bytes
+that get pushed into a plugin's `load(self, vector<uint8_t>)`) are
+*also* encrypted, but with a completely different scheme from the
+metadata. `libhub.so::Certify::d` (offset `0x80990`) is the path
+that runs on every blob:
+
+1. **ECIES** decrypt with a static secp521r1 private key.
+2. **Gunzip** the decrypted plaintext.
+3. **Hex-decode** the inflated text into the final firmware binary.
+
+The ECIES suite parameters were lifted directly from the decompiled
+function (the CryptoPP type names show up explicitly):
+
+```cpp
+typedef CryptoPP::ECIES<
+    CryptoPP::ECP,                             // curve over prime field
+    CryptoPP::SHA3_512,                        // hash for KDF + MAC
+    CryptoPP::IncompatibleCofactorMultiplication, // cofactor=2
+    /*DHAES_MODE=*/true,
+    /*LABEL_OCTETS=*/false> DellECIES;
+```
+
+The curve OID encoded in the embedded private key is `1.3.132.0.35`
+(secp521r1). KDF = `P1363_KDF2<SHA3_512>`, MAC =
+`HMAC<SHA3_512>`. Output of `Certify::d` is the firmware binary
+followed by a 222-byte trailer that `Certify::c` validates:
+
+| Bytes | Meaning |
+|---|---|
+| 0…131  | Raw ECDSA signature (`r ‖ s`, IEEE-1363, 66 bytes each) |
+| 132…221 | DER `SubjectPublicKeyInfo` carrying a *compressed* secp521r1 signing pubkey |
+
+Signature alg is `ECDSA-secp521r1-with-SHA3_512` (also visible as
+`DL_VerifierBase<ECPPoint,…,SHA3_512,…>` in libhub.so's typeinfo).
+
+##### Where the key lives
+
+The PKCS#8-encoded EC private key is a literal byte array in
+`libhub.so`'s `.rodata` at symbol `_ZL13CK_PV_RawData` (offset
+`0x19ace0`, 98 bytes). For the U4025QW M3T105 build:
+
+```
+30 60 02 01 00 30 10 06 07 2a 86 48 ce 3d 02 01
+06 05 2b 81 04 00 23 04 49 30 47 02 01 01 04 42
+01 74 26 f1 02 5d d6 6a 3d f6 a1 e1 da 1d 9d d7
+ae d4 ca 61 86 f2 6e ee 83 30 71 7b 81 85 58 55
+2f ea e2 3b 18 a7 1d 3e d9 29 74 a3 ec 5d 5b 4f
+c4 c8 a0 53 63 cd 38 b2 80 b5 66 e5 f0 e3 fc de
+ce 7a
+```
+
+Saved verbatim as `captures/CK_PV.pkcs8.der` and as PEM in
+`captures/CK_PV.pem`.
+
+##### Reproducing it ourselves
+
+`ghidra/scripts/ecies-decrypt.cpp` is a 100-line Crypto++ program
+that takes the PKCS#8 key + an encrypted blob and runs the full
+ECIES → Gunzip → HexDecode pipeline. Verified end-to-end against
+the live capture: a 71,848-byte encrypted slice from libhub's
+input vector decrypts to 131,072 bytes of firmware (byte-identical
+to the plaintext we captured at the per-plugin `load()` call) plus
+a 222-byte signature/pubkey trailer.
+
+```bash
+nix-shell -p cryptopp gcc --run \
+  'g++ -std=c++17 -O0 -o ecies-decrypt ecies-decrypt.cpp -lcryptopp'
+./ecies-decrypt CK_PV.pkcs8.der encrypted-slice.bin out.bin
+# → out.bin = firmware (131072 bytes) + signature trailer (222 bytes)
+```
+
+##### Implications for the plugin
+
+The private key is shipped in every customer's libhub.so, so the
+ECIES layer is **obfuscation, not security** — anyone with the .deb
+can decrypt. The integrity guarantee comes from the ECDSA
+signature trailer (which the plugin can re-verify if we extract
+the signing root pubkey, but isn't strictly required for
+flashing).
+
+Practical options for the fwupd plugin:
+
+1. Hardcode the U4025QW key (and any other known-model keys) in
+   the plugin source as a small key table.
+2. Ship the key as a small data file alongside the plugin.
+3. Build a one-shot extractor (`extract-key /path/to/libhub.so`)
+   that pulls `CK_PV_RawData` from any libhub.so the user provides.
+
+**The key is fleet-wide and time-stable** (empirically verified
+against two unrelated bundles):
+
+| Bundle | Released | libhub.so build | `CK_PV` SHA-256 |
+|---|---|---|---|
+| `Dell_U4025QW_FWUpdate_M3T105_Ubuntu.deb` | 2024 monitor | Oct 9, 2025 | `0eede35b…892c7bd0` |
+| `Dell_U3224KB_FWUpdate_M2T105_Ubuntu.deb` | 2023 monitor | Dec 12, 2023 | `0eede35b…892c7bd0` |
+
+Same 98-byte PKCS#8 blob, two completely different monitors,
+~2 years apart in build dates. The U3224KB binary is stripped
+(no `_ZL13CK_PV_RawData` symbol), but the literal bytes are still
+locatable by searching for the PKCS#8 secp521r1 wrapper prefix:
+
+```
+30 60 02 01 00 30 10 06 07 2a 86 48 ce 3d 02 01
+06 05 2b 81 04 00 23 04 49 30 47 02 01 01 04 42
+```
+
+This is a fixed-format ASN.1 wrapper (anything matching is a
+98-byte PKCS#8 ECPrivateKey on `secp521r1`), so the same grep
+should pick the key out of any future Dell-monitor `libhub.so`
+the Wistron stack ships.
+
+**Plugin implication: hardcode the key.** It looks like Wistron's
+signing/encrypting infrastructure produces this single keypair
+for every Dell monitor it builds, so a single 98-byte constant
+in our plugin source covers the whole supported fleet. If a
+future bundle ships with a different key, swap the constant.
+
 #### Open follow-ups for this section
 
 - [ ] Walk one component's bytes end-to-end to lock down the
