@@ -620,21 +620,140 @@ The existing `realtek-mst` plugin in fwupd already has the SRAM-staged
 write loop and erase polling at exactly this level of abstraction; the
 work is largely about plugging this transport in beneath that loop.
 
+#### Canonical update sequence (recovered from disassembly)
+
+Walking `FL5500_IIC_ISP::update_hub()` and the API methods underneath
+gives us the full algorithmic description of one component's flash:
+
+```c
+// FL5500_IIC_ISP::update_hub() — top-level for a single component
+void update_hub() {
+    if (image_size != 0x10000) return error;             // expects 64 KB image
+    set_sram_page();                                      // chip-mode setup
+    set_spi_flash_start_addr(0x10000);                    // SPI base offset
+    for (i = 0; i < 16; i++) {                            // 16 × 4 KB = 64 KB
+        // status / progress reporting via ModuleMessage
+        sram_to_spi_flash(
+            spi_addr   = 0x10000 + (i << 12),             // 4 KB stride
+            buf        = source + (i * 0x1000),
+            sram_count = 0x32,                            // 50 (purpose TBD)
+            retries    = 0x64                             // 100 retries
+        );
+    }
+}
+
+// FL5500_IIC_API::sram_to_spi_flash() — one 4KB sector
+void sram_to_spi_flash(uint32 spi_addr, uint8* buf, int count, int retries) {
+    write_byte(0x5009, 0x00);                             // clear control regs
+    write_byte(0x500A, 0x00);
+    write_byte(0x500B, 0x00);
+    write_byte(0x5001, 0xAA);                             // arm trigger (magic)
+    write_byte(0x5004, spi_addr & 0xFF);                  // SPI addr byte 0
+    write_byte(0x5005, (spi_addr >> 8) & 0xFF);           // SPI addr byte 1
+    write_byte(0x5006, (spi_addr >> 16) & 0xFF);          // SPI addr byte 2
+    write_spi_sector(buf, 0x1000);                        // 4 KB
+}
+
+// FL5500_IIC_API::write_spi_sector() — stage 4 KB through SRAM, then commit
+void write_spi_sector(uint8* buf, int len) {
+    write_byte(0x5007, 0x00);                             // SPI control = idle
+    write_byte(0x5008, 0xE0);                             // enable SPI master
+    write_burst(0x6000, buf, len, chunk_size = 16);       // staged via SRAM @ 0x6000
+    write_byte(0x5826, 0x10);                             // GO: copy SRAM → SPI
+}
+
+// FL5500_IIC_API::write_burst() — split into 16-byte I²C transactions
+void write_burst(uint16 sram_addr, uint8* buf, uint16 len, uint8 chunk_size = 16) {
+    chunk_size = min(chunk_size, 16);                     // hard cap at 16
+    for (off = 0; off < len; off += chunk_size) {
+        IIC_INTF::write(reg = 0, addr = sram_addr + off,
+                        buf = buf + off);                  // 1 wire write each
+    }
+}
+```
+
+**One full HUB component update therefore emits:**
+
+| Layer | Per-call wire writes | Per-component |
+|-------|---------------------:|--------------:|
+| `write_byte` register configures (in `sram_to_spi_flash`) | 7 | 16 sectors × 7 = 112 |
+| `write_burst` chunks (in `write_spi_sector`, 4 KB ÷ 16 B) | 256 | 16 × 256 = 4096 |
+| Trigger writes (`0x5826 = 0x10`, etc.) | 2 | 16 × 2 = 32 |
+| **Total per HUB component** |  | **≈ 4 240 wire writes** |
+
+The captured pcap showed 13,312 `40 f1 …` writes total, which fits if
+the flow runs over ~3 components (HUB + DISPLAY + DISPLAY, or
+HUB×3) or has additional retry/verify passes.
+
+#### Key chip-side register map (recovered)
+
+| Register | Value | Meaning |
+|----------|-------|---------|
+| `0x5001` | `0xAA` | Trigger arm (magic) |
+| `0x5004` | addr[7:0] | SPI flash dest addr byte 0 |
+| `0x5005` | addr[15:8] | SPI flash dest addr byte 1 |
+| `0x5006` | addr[23:16] | SPI flash dest addr byte 2 |
+| `0x5007` | `0x00` | SPI control = idle |
+| `0x5008` | `0xE0` | SPI master enable |
+| `0x5009` / `0x500A` / `0x500B` | `0x00` | Control state clear |
+| `0x5826` | `0x10` | GO: SRAM → SPI flash copy |
+| `0x6000`+ | data | SRAM staging window (4 KB capacity) |
+
+#### IspStage enum (recovered from `set_progress`'s jump table)
+
+5 values (jump table with `cmp $0x4`), mapped to monotonic progress milestones:
+
+| `IspStage` | Sets `last_value` to | Plain meaning |
+|----------:|---------------------:|---------------|
+| 0 | reset/init | beginning of an attempt |
+| 1 | computed percent | mid-flash progress driven by sector index |
+| 2 | ≥ 5 % | erase complete |
+| 3 | ≥ 10 % | handshake / pre-write |
+| 4 | ≥ 100 % | done |
+
+The progress is rendered to the user via `ModuleMessage::send` /
+`ModuleMessage::update` — we'll equivalently drive
+`fu_progress_set_percentage()`.
+
+Format strings used by the message system (lifted verbatim — useful
+for matching error codes against future failures and for the plugin's
+own log lines):
+
+```
+Updating   => stage: [%d] - Attempt %d
+Updating   => stage: [%d] - success.
+Updating   => stage: [%d] - failed (%02X). Retrying...
+Updating   => clear address fail. (0x%08X)
+Updating   => write flash fail. (0x%08X)
+Updating   => verify fw fail. (0x%08X)
+Updating   => Hub Soft-Reset and wait HUB re-enumeration. (0x%02X)
+Updating   => Update hub info fail. (err: 0x%02X)
+Updating   => same version, skip it. (0x%02X)
+Updating   => Completed.
+```
+
+The "Hub Soft-Reset and wait HUB re-enumeration" message confirms the
+plugin needs to handle a deliberate hub reset after the write phase
+(this matches the `addr 31 → addr 0/1` re-enumeration we observed at
+~905 s in the pcap timeline).
+
 #### Open follow-ups for this section
 
-- [ ] Identify the precise opcodes for: bootloader-enter
-      (the one-off `04 08 02 00 01` to addr 17 — different
-      command-class entirely), `0xE1` configure, and the `40 c6` that
-      `RTS5409S_HID::write` emits (does it ever appear under load?).
-- [ ] Walk `FL5500_IIC_ISP::isp()` to extract the canonical update
-      sequence as a single annotated function trace.
-- [ ] Decode the response payload of `0xC0 F3` (the polling response)
-      to figure out what the host is checking for between writes.
-- [ ] Confirm that the vendor-sig bytes (offsets 5-6) are only on
-      `enable_vdcmd`-class commands and not on flash writes.
-- [ ] Identify which other hub-IC classes (`Mchp58xx_72xx_ISP`,
-      `PS5512_IIC_ISP`, `Rts5418e_ISP`) might give us "free" support
-      for other Dell monitor models with the same Wistron architecture.
+- [ ] Walk the `Rts5409s_IIC_ISP::isp()` (a sibling of FL5500's) to
+      see the *hub-MCU* update sequence. Almost certainly very similar
+      register/write structure but acting on the RTS5409S's own flash.
+- [ ] Decode the `0xC0 F3` poll response to understand the success-
+      vs-busy bit pattern.
+- [ ] Identify the bootloader-enter command (`04 08 02 00 01`) — it
+      doesn't follow the `0x40` direction format and is sent to the
+      transient address 17, suggesting an early-init code path
+      probably in `RTS5409S_HID::open()` rather than the ISP class.
+- [ ] Map the `.upg` file's component-section payloads into the
+      sequence: which 6 components correspond to which `update_*()`
+      function calls, in what order.
+- [ ] Confirm the assumption that the 13,312 captured `0x40 F1` writes
+      represent multiple-component flashes (not a single 64 KB hub
+      write × ~22 chunk-size-mismatch).
 
 ### Per-phase timeline of the captured update
 
