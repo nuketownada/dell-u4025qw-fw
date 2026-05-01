@@ -1316,9 +1316,12 @@ In the captured update Dell's binary sent to *both* MCUs:
 
 So the Ethernet MCU uses the **same vendor-command stack** we already
 implement (`enable_vdcmd` → `enable_high_clock` → opcode 0x09 read).
-Dell's binary only *probed* it for a version readout in this capture;
-either its firmware was already current or M3T105 doesn't bundle an
-Ethernet-MCU component.
+Dell's binary only *probed* it for a version readout in this capture
+and then closed without updating. The capture was a re-flash of
+M3T105 onto a monitor already at M3T105, so the binary cannot have
+been short-circuiting on a same-version check — meaning the M3T105
+.upg simply has no Ethernet-MCU component to push. Other monitor
+firmware bundles may include one.
 
 Adding Ethernet-MCU support later means: match `DEV_1101` in the
 quirk, skip the cal_auth/I²C-tunnel steps, and reuse `vcmd`,
