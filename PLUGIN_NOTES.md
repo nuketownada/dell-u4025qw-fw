@@ -1289,21 +1289,42 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
 ### Notes — two HID interfaces, two MCUs
 
 The U4025QW's USB enumeration shows two `0bda:11xx` HID interfaces on
-different sub-paths of its internal hub:
+different sub-paths of its internal hub. **They are independent MCUs,
+not duplicate paths to the same chip:**
 
 - `DEV_1100` (path `…/3-1.4.1.5`): the upstream RTS5409S hub MCU.
   Hub-version read returns `2.04`. cal_auth handshake works. I²C tunnel
   to FL5500 works. Where the M3T105 update flows. This is what we
   match in our quirk.
-- `DEV_1101` (path `…/3-1.4.2.4`): a secondary MCU (probably the
-  dock-side Ethernet controller — the U4025QW has a built-in RJ45).
-  Hub-version read returns `2.06`. cal_auth handshake STALLs even
-  in isolation, so it's a different protocol gate (or no gate, just
-  no support for the same opcodes). We don't enumerate it.
+- `DEV_1101` (path `…/3-1.4.2.4`): the dock-side Ethernet controller.
+  USB descriptor identifies it as `0bda:8156` = Realtek RTL8156
+  (2.5 GbE). Hub-version read returns `2.06`. cal_auth STALLs because
+  there's no second chip behind it that needs gating; it just doesn't
+  implement that opcode.
 
-If a future Dell monitor also needs Ethernet-controller updates we'd
-add a second match entry and a second device class — but that's a
-clean greenfield problem, not a dedup problem.
+In the captured update Dell's binary sent to *both* MCUs:
+
+| Traffic to DEV_1100 (scaler path) | Traffic to DEV_1101 (Ethernet) |
+|---|---|
+| `40 02` enable_vdcmd | `40 02` enable_vdcmd |
+| `40 06` enable_high_clock | `40 06` enable_high_clock |
+| `c0 09` get_fw_version | `c0 09` get_fw_version |
+| `40 e1` cal_auth handshake | — |
+| `40 c6` / `40 d6` I²C tunnel | — |
+| `40 f1` / `40 f3` SRAM write loop | — |
+| `40 06` close | `40 06` close |
+
+So the Ethernet MCU uses the **same vendor-command stack** we already
+implement (`enable_vdcmd` → `enable_high_clock` → opcode 0x09 read).
+Dell's binary only *probed* it for a version readout in this capture;
+either its firmware was already current or M3T105 doesn't bundle an
+Ethernet-MCU component.
+
+Adding Ethernet-MCU support later means: match `DEV_1101` in the
+quirk, skip the cal_auth/I²C-tunnel steps, and reuse `vcmd`,
+`vcmd_read`, `read_version`. No new protocol reversing needed for
+discovery; only the actual update flow (which we'd need a fresh
+capture for, since this pcap doesn't include one).
 
 ### Blocked
 
