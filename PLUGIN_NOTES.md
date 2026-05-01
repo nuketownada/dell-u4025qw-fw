@@ -1260,22 +1260,28 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   byte array is the only model-specific input.
 - **I²C tunnel end-to-end (HID-A).** With the derived key fed into
   the `0xE1` handshake, the plugin successfully:
-  1. Sends a DDC/CI request through the `0xC6` write opcode
-     (`51 84 c0 99 ee 20 2c` — Dell's first phase-1 register read).
+  1. Sends a DDC/CI request through the `0xC6` write opcode.
   2. Sleeps 50 ms (the FL5500 needs time to compose its reply).
   3. Pulls the response via `0xD6` + `HIDIOCGINPUT`.
 
-  The reply matches Dell's captured response byte-for-byte:
-  ```
-  device:   51 90 c1 99 37 35 33 2e 30 41 4b 30 31 2e 30 30 30 37 c4
-  pcap:     51 90 c1 99 37 35 33 2e 30 41 4b 30 31 2e 30 30 30 37 c4   (frame 7995)
-  ```
-  ASCII payload = `"753.0AK01.0007"` (a panel-ID string, not the
-  user-facing M3T105 — but the value isn't the point; the point is
-  that the tunnel reproduces Dell's protocol exactly).
+- **User-facing firmware version read.** The DDC/CI selector
+  `c0 99 cc 20` returns the same Dell-branded firmware identifier
+  the GUI displays. For our monitor that's `M3T105`. The plugin
+  reads this and exposes it through `fu_device_set_version`.
+
+  Other DDC/CI `c0 99 XX YY` selectors observed in Dell's pcap (all
+  return short ASCII strings; useful as instance-IDs and serials):
+
+  | Selector | Returns | Meaning |
+  |---|---|---|
+  | `c0 99 cc 20` | `M3T105` | **Firmware version** (used by plugin) |
+  | `c0 99 ee 20` | `753.0AK01.0007` | Panel ID (LG `0AK` model code) |
+  | `c0 99 aa 14` | `VN0VV8X4WS7006172974` | Dell service tag |
+  | `c0 99 ab 20` | `B7LM884` | Board / MCU code |
+  | `c0 01 e6 00` | 2-byte status | DDC/CI feature flag |
 
   `fwupdtool get-devices` now reports the HID-A interface as
-  `Current version: hub-2.04+scaler-753.0AK01.0007`.
+  `Current version: M3T105`.
 
 ### Blocked
 
@@ -1286,11 +1292,6 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   back-to-back use confuses it. Either we deduplicate the two
   interfaces into a single logical FuDevice (the eventual right
   answer) or we serialize and reset between them.
-- **The DDC/CI register that carries the user-facing M3T105 version.**
-  We can read panel-ID-ish strings, but we don't yet know which
-  DDC/CI command id (`0x99 ?? ??` triplet) returns "M3T105". A short
-  follow-up task: replay all four `40 c6` reads from phase 1 of the
-  pcap and decode the responses.
 - **Erase / write / status-poll path on the FL5500.** Wire formats
   are already documented in PLUGIN_NOTES, but the actual sequencing
   (handshake-per-write-burst, polling cadence, etc.) needs to be
