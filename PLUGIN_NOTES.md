@@ -1162,19 +1162,14 @@ The file `/home/vsts/work/1/s/parade_ps5512/ps5512_vdcmd.cpp`
 - `cert2.dat` — 26 bytes: 4-byte `de ad be ef` magic + 22-char
   Base64URL = a 16-byte AES-128 key. Almost certainly the master key
   for decrypting `appconfig.dat`. Not yet required by our plugin.
-- `appconfig.dat` — 813 bytes encrypted. **NOT** the slot→chip
-  mapping (which we initially assumed) — actually app tunables. The
-  strings clustered around the `appconfig.dat` reference in the main
-  binary are config keys: `skip_version_check`,
-  `enable_application_retry`, `mchp_hub_rom_code_pid`,
-  `scan_devices_extra_delay`, `isptag_command_extra_delay`,
-  `minimum_rollback_version`, `ti_pd_use_flvy_only`, etc. Decrypting
-  it would give us those tunables but isn't blocking — the plugin
-  doesn't need them. Probe tool at
-  `ghidra/scripts/decrypt-appconfig.py` covers AES-CBC/CFB/CTR with
-  HKDF-SHA256 / PBKDF2 derivation across many key/info/salt
-  combinations; nothing has matched yet. Probably needs Ghidra-level
-  reversing of the main binary to find the exact KDF and IKM source.
+- `appconfig.dat` — 813 bytes encrypted. App tunables (config keys
+  visible in the main binary's strings near the `appconfig.dat`
+  reference: `skip_version_check`, `enable_application_retry`,
+  `mchp_hub_rom_code_pid`, `scan_devices_extra_delay`, …). Some
+  (rollback version, scan delays, ROM-code PIDs) are quirks Dell
+  relies on across monitor models. *Different decryption scheme from
+  `decrypt_string` — uses a different binary format and probably a
+  different key. Not yet cracked, not blocking any plugin work.*
 
 #### Component → plugin → chip dispatch (in the main binary)
 
@@ -1211,22 +1206,114 @@ interface files `audio.cpp`, `bridge.cpp`, `display.cpp`,
    LUT and constructs the matching ISP class (e.g.
    `FL5500_IIC_ISP`).
 
-The exact chip-type string passed at step 5 is wrapped in a
-`get_string()` call (which is a thin tail-call to `decrypt_string`),
-so the plain-text "PARADE FL5500 IIC" lives encrypted in libhub's
-.rodata and is decrypted on demand. The encryption key chain seems
-to share `cert2.dat` with `appconfig.dat`.
+**Important correction.** The chip-type STRING ("PARADE FL5500 IIC")
+that step 5 receives doesn't actually need to be decrypted at runtime
+in our plugin's code path — it's a *libhub-internal* lookup key that
+maps onto the chip-type GUID. Both ends of that lookup are stable
+across monitor models. **What the .upg actually carries is the
+chip-type GUID** (e.g. `55afe793-…` for RTS5409S IIC), encrypted with
+a per-product passphrase using the `decrypt_string` scheme below.
+Our plugin reads the GUID directly from the .upg, then uses our own
+GUID → handler dispatch table — bypassing the chip-type-name lookup
+entirely. See "Per-component metadata" below for the full picture.
 
-For our fwupd plugin, we **bypass this entire dispatch** because we
-hardcode the U4025QW's chip mapping: `HUB → FL5500_IIC_ISP @ I²C
-0x70`. Adding a second monitor model that uses the same FL5500
-needs no change. A monitor with a different scaler chip would need a
-new chip-handler in our plugin source.
+#### `decrypt_string` — algorithm and passphrase format (CRACKED)
 
-For a Dell-style fully-generic implementation, we'd need to crack
-`appconfig.dat` (for tunables) and either crack `decrypt_string` or
-pre-extract the chip-type name table per plugin .so. None of that is
-strictly necessary to ship a working plugin for the U4025QW.
+`decrypt_string()` (defined locally in each plugin .so as
+`_Z14decrypt_stringPKcS0_`) is exactly the CryptoPP template
+instantiation visible in the type names:
+
+```cpp
+DataDecryptorWithMAC<Rijndael, SHA256, HMAC<SHA256>,
+                     DataParametersInfo<16, 16, 32, 8, 2500>>
+```
+
+That is: AES-128 + HMAC-SHA256 with 8-byte salt, 32-byte MAC key,
+2500 PBKDF1 iterations using SHA-256. The function takes
+`(passphrase, base64url_ciphertext)` → plaintext; the input is
+Base64URL-decoded into raw bytes that CryptoPP's
+`DataDecryptorWithMAC` consumes directly.
+
+**Passphrase format** (recovered by gdb-tracing every `decrypt_string`
+call at startup):
+
+```
+Wistron@<MODEL>
+```
+
+For the U4025QW the literal string is `Wistron@U4025QW`, embedded as a
+const C string in main `Firmware Updater`'s `.rodata` (visible in the
+trace at `ptr=0x5555558f8d50` "in Updater"). Wistron is the OEM (Dell
+contracts panel + integration to them), and `<MODEL>` is the
+short-form model identifier — the same string that's also present
+unencrypted in the .upg header at offset `0x14`.
+
+**Reproducing it ourselves**: `ghidra/scripts/decrypt-blob.cpp`
+re-uses CryptoPP and is a 50-line tool. `decrypt-blob <passphrase>
+<base64url>` → plaintext. Built with
+`g++ -std=c++17 -o decrypt-blob decrypt-blob.cpp -lcryptopp` inside a
+`nix-shell -p cryptopp gcc`. Already verified against multiple
+captured (input, output) pairs from the gdb trace and against the
+.upg's per-component metadata.
+
+#### Per-component metadata (decrypted from the .upg)
+
+Once we have `decrypt_string`, every Base64URL run in the .upg
+decrypts cleanly under `Wistron@<MODEL>`. The script
+`ghidra/scripts/dump-upg-metadata.py` walks the .upg, tries each
+≥88-char Base64URL run, and prints the plaintext. For the U4025QW
+M3T105 .upg this gives us, per component, fields like:
+
+```
+8× '0'              # placeholders / reserved
+'U4025QW'           # product short name
+'1.04'              # per-component version
+'2025-10-09'        # build date
+'F9FE'              # 4-char hex (likely CRC32 of the binary payload)
+'55afe793-98e8-470e-ad09-993be2b3b016'   # chip-type GUID
+'5f3ba3d6-a0bd-4270-9938-814a45d5c824'   # affiliated/related chip-type GUID
+'0x0bda'            # USB VID
+'0x1100'            # USB PID
+'0xD4'              # I²C target byte (or chip-internal index)
+... more zero placeholders ...
+'0x800', '0x4400'   # flash size info (capacity / region size)
+'753.0AK01.0007'    # panel ID (from EDID)
+```
+
+**The chip-type GUID is the dispatch key our plugin needs.** It maps
+1:1 onto a chip-handler (the same way each Dell plugin .so's
+`get_handle()` switch case does). For the GUIDs we've seen so far in
+the U4025QW M3T105 bundle:
+
+| GUID | Chip family | Plugin .so providing it | Our handler |
+|---|---|---|---|
+| `55afe793-98e8-470e-ad09-993be2b3b016` | REALTEK RTS5409S IIC | libhub | TODO |
+| `5f3ba3d6-a0bd-4270-9938-814a45d5c824` | REALTEK RTS5418E USB | libhub | TODO |
+| `ea72869e-aa74-401c-8eda-8cf53ab7be72` | unknown — likely a Parade scaler since it's the second GUID on the HUB component | TBD | TODO |
+| `23d1218b-1805-42af-874c-1316003b6c7d` | Dell-internal model/SKU GUID | n/a | (used for matching only) |
+
+The complete chip-type GUID table (across all of libhub.so's 9
+entries, plus libpdc / libdisplay / others as we decompile them) is
+the mapping our plugin source needs to encode. That table is small,
+stable, and fully reverse-engineerable from the plugin .so's static
+dispatch tables (which we've already seen for libhub).
+
+**Per-product passphrase ⇒ multi-monitor support**: any Dell monitor
+.upg should decrypt with `Wistron@<MODEL>` where `<MODEL>` comes from
+the .upg's product field. So our plugin works for any Dell monitor
+shipped through this same `Wistron@…` scheme without per-monitor
+hardcoding — the only per-monitor knowledge is the chip-type GUIDs,
+which the .upg itself supplies.
+
+**Solved.** A gdb-trace of `decrypt_string` at startup revealed the
+passphrase format (`Wistron@<MODEL>`) and confirmed the algorithm
+matches the CryptoPP type names. From there we wrote a small
+CryptoPP-using `decrypt-blob` tool and used it to dump every
+encrypted blob in the .upg in plaintext. The .upg's per-component
+metadata explicitly carries the **chip-type GUID** for each
+component, which is all our plugin needs to dispatch. See
+"`decrypt_string` — algorithm and passphrase format (CRACKED)" and
+"Per-component metadata" below for the full story.
 
 #### Open follow-ups for this section
 
@@ -1405,9 +1492,13 @@ capture for, since this pcap doesn't include one).
 
 ### Next milestone
 
-1. Implement the bootloader-enter `04 08 02 00 01` opcode and the
+1. **Recover the slot→plugin→chip→protocol dispatch matrix.** This is
+   what makes our plugin a real Dell-monitor plugin (vs. a U4025QW
+   one-off) and what justifies upstreaming. See "Component → plugin
+   → chip dispatch" above for the four candidate paths.
+2. Implement the bootloader-enter `04 08 02 00 01` opcode and the
    re-enumeration wait.
-2. Implement `0xF1` SRAM-write loop with `0xF3` status polling — the
+3. Implement `0xF1` SRAM-write loop with `0xF3` status polling — the
    actual flash-write code path. We have wire formats for both.
 
 ### Plugin file layout (current)
