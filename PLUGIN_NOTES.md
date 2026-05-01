@@ -1155,13 +1155,78 @@ The file `/home/vsts/work/1/s/parade_ps5512/ps5512_vdcmd.cpp`
 (the source path leaked in libdevices.so) confirms "vdcmd" =
 "vendor command [protocol]" and is a per-vendor extension to USB-HID.
 
-#### Cert / config files (unchanged from earlier section)
+#### Cert / config files
 
-- `cert.dat` — 18 bytes (likely identity hash)
-- `cert2.dat` — 26 bytes ASCII (likely short-form identifier)
-- `appconfig.dat` — 813 bytes (unknown; possibly encrypted config —
-  not strictly needed for the plugin to function since the .upg
-  carries everything)
+- `cert.dat` — 18 bytes; the per-product seed buffer for `get_synkey`
+  (see "I²C tunnel auth handshake"). Despite the name, NOT a cert.
+- `cert2.dat` — 26 bytes: 4-byte `de ad be ef` magic + 22-char
+  Base64URL = a 16-byte AES-128 key. Almost certainly the master key
+  for decrypting `appconfig.dat`. Not yet required by our plugin.
+- `appconfig.dat` — 813 bytes encrypted. **NOT** the slot→chip
+  mapping (which we initially assumed) — actually app tunables. The
+  strings clustered around the `appconfig.dat` reference in the main
+  binary are config keys: `skip_version_check`,
+  `enable_application_retry`, `mchp_hub_rom_code_pid`,
+  `scan_devices_extra_delay`, `isptag_command_extra_delay`,
+  `minimum_rollback_version`, `ti_pd_use_flvy_only`, etc. Decrypting
+  it would give us those tunables but isn't blocking — the plugin
+  doesn't need them. Probe tool at
+  `ghidra/scripts/decrypt-appconfig.py` covers AES-CBC/CFB/CTR with
+  HKDF-SHA256 / PBKDF2 derivation across many key/info/salt
+  combinations; nothing has matched yet. Probably needs Ghidra-level
+  reversing of the main binary to find the exact KDF and IKM source.
+
+#### Component → plugin → chip dispatch (in the main binary)
+
+Reverse-engineered by Ghidra-decompiling the main `Firmware Updater`
+binary (`/home/vsts/work/1/s/plugins/pluginmanager.cpp` plus per-slot
+interface files `audio.cpp`, `bridge.cpp`, `display.cpp`,
+`ethernet.cpp`, `hub.cpp`, `mcu.cpp`, `pdc.cpp`, `tbt.cpp`,
+`touch.cpp`, `tts.cpp`, `webcam.cpp`):
+
+1. **Plugin discovery** — main scans `plugins/`, calls `dlopen` on
+   each `.so`, then `dlsym("register_module")` to get its module GUID.
+2. **GUID → interface class** — main has a hardcoded chain of
+   `string::compare` against per-slot module GUIDs. On match it
+   constructs the matching interface class wrapper (sized 0x160 to
+   0x1b8 bytes depending on the slot) and stashes it at a fixed
+   slot-specific offset in the application context (e.g. hub at
+   +0x180, pdc at +0x188, display at +0x190, ...).
+3. **Interface wrapper** — each wrapper dlsym's the standard plugin
+   API: `register_module`, `get_handle`, `release_handle`, `load`,
+   `start`, `check_start`, `pause_device`, `reset`,
+   `set_device_handler`, `set_message_callback`, `set_device_info`,
+   `set_device_config`, `set_device_path`,
+   `set_affiliated_device_path`, `get_string`, `get_fw_version`,
+   `get_custom_info`, plus hub-specific extras (`set_other_info`,
+   `set_start_index`, `set_chunk_size`, `get_model_name`,
+   `get_flash_wp_status`).
+4. **Component → interface routing** — the .upg's component name
+   (e.g. `"HUB"`, `"DISPLAY"`) is matched to one of the interface
+   wrappers via the per-slot interface .cpp logic. Each interface
+   knows it serves one specific slot family.
+5. **Interface → chip type → ISP class** — the interface wrapper's
+   `get_handle()` ends up calling `libhub.so::get_handle("PARADE
+   FL5500 IIC")` (or similar), which scans libhub's 9-entry chip-type
+   LUT and constructs the matching ISP class (e.g.
+   `FL5500_IIC_ISP`).
+
+The exact chip-type string passed at step 5 is wrapped in a
+`get_string()` call (which is a thin tail-call to `decrypt_string`),
+so the plain-text "PARADE FL5500 IIC" lives encrypted in libhub's
+.rodata and is decrypted on demand. The encryption key chain seems
+to share `cert2.dat` with `appconfig.dat`.
+
+For our fwupd plugin, we **bypass this entire dispatch** because we
+hardcode the U4025QW's chip mapping: `HUB → FL5500_IIC_ISP @ I²C
+0x70`. Adding a second monitor model that uses the same FL5500
+needs no change. A monitor with a different scaler chip would need a
+new chip-handler in our plugin source.
+
+For a Dell-style fully-generic implementation, we'd need to crack
+`appconfig.dat` (for tunables) and either crack `decrypt_string` or
+pre-extract the chip-type name table per plugin .so. None of that is
+strictly necessary to ship a working plugin for the U4025QW.
 
 #### Open follow-ups for this section
 
