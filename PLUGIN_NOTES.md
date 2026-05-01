@@ -467,25 +467,174 @@ RTD2141B/RTD2142 over the DisplayPort aux channel. We can crib the
 flash-protocol structure from there and just swap the transport
 (DP-aux → HID class control transfers).
 
+#### Source tree, recovered from debug paths
+
+The plugins ship with debug info that reveals Wistron's source
+organisation:
+
+```
+/home/vsts/work/1/s/                    ; Azure DevOps build root
+├── devices/
+│   ├── microchip_pic16f1454/{pic16f1454_hid.cpp, pic16f1454_iic.cpp}
+│   ├── microchip_usb5734/{usb5734_hid.cpp, usb5734_iic.cpp}
+│   ├── microchip_usb5916/{…}
+│   ├── microchip_usb7206/{usb7206_hid.cpp, usb7206_iic.cpp,
+│   │                     usb7206_vcmd.cpp}                ; vendor-cmd helpers
+│   ├── ti_tusb3410/{tusb3410_hid.cpp, tusb3410_iic.cpp}
+│   ├── ti_tusb8043/{…}
+│   └── realtek_rts5409s/{rts5409s_hid.cpp, rts5409s_iic.cpp}
+├── hub/
+│   ├── realtek_rts5418e_usb/rts5418e_isp.cpp
+│   ├── microchip_usb58xx_usb72xx_usb/mchp58xx_72xx_isp.cpp
+│   └── microchip_usb72xx_usb_v3/mchp_usb72xx_v3_isp.cpp
+└── parade_ps5512/ps5512_vdcmd.cpp
+```
+
+Translation to plugin layout:
+
+| Plugin | Notable classes | Purpose |
+|--------|----------------|---------|
+| `libdevices.so` | `RTS5409S_HID`, `RTS5409S_IIC`, `USB5734_HID`, `TUSB3410_IIC`, `PS5512_HID`, `PIC16F1454_IIC`, `USB5916_IIC`, … | Per-chip USB/HID transports + per-chip I²C tunnels (the actual wire-bytes layer) |
+| `libhub.so` | `FL5500_IIC_ISP`, `Rts5409s_IIC_ISP`, `Mchp58xx_72xx_ISP`, `Mchp72xx_V3_ISP`, `Rts5418e_ISP`, `PS5512_IIC_ISP` | High-level ISP orchestrators for hub MCUs and the scaler |
+| `libdisplay.so` | `MStarISP`, `RealtekISP`, `MSTAR_API` | Display panel TCON / scaler updates (alternative path) |
+| `libpdc.so` | `RTS545X_ISP`, `TitanRidge_ISP`, `Tps6598xISP` | USB-PD controllers |
+| `libtbt.so` | `GoshenRidge_ISP`, `TitanRidge_ISP` | Thunderbolt controllers |
+| `libwebcam.so` | `SigmaStar_Camera_ISP` | Webcam ISP |
+| `libtouch.so` | `FlatFrog_Touch_ISP` | Touch panel |
+| `libaudio.so` | `ALC4058_ALC5576_ISP`, `CX20889_ISP` | Audio codecs |
+
+The U4025QW's specific update path goes through:
+- `libhub.so:FL5500_IIC_ISP` (high-level)
+   ↓ injected via `set_i2c_handler(IIC_INTF*)`
+- `libdevices.so:RTS5409S_IIC` (concrete `IIC_INTF`)
+   ↓ wraps
+- `libdevices.so:RTS5409S_HID` (libusb-hidapi transport)
+   ↓ sends
+- `libusb_control_transfer` → SET_REPORT class request
+
+#### Wire format — fully decoded
+
+Confirmed by disassembling `RTS5409S_HID::enable_vdcmd(bool, bool)` and
+matching against the captured frame 70866 of the pcap.
+
+**libusb call**:
+```
+bmRequestType = 0x21              ; host→device, class, interface
+bRequest      = 0x09              ; SET_REPORT
+wValue        = 0x0200            ; ReportType = Output (2), ReportID = 0
+wIndex        = 0x0000            ; interface 0
+wLength       = 0x00C0            ; 192 bytes
+```
+
+`hid_write` is called with a 193-byte buffer; because ReportID = 0, the
+leading byte is stripped on the wire, leaving the 192-byte payload below.
+
+**192-byte payload**:
+```
+offset  size  field         meaning
+   0     1    direction     0x40 = WRITE (host→device data flow)
+                            0xC0 = READ-back (host expects subsequent IN)
+   1     1    opcode        vendor command opcode
+                            ──────────────────────
+                            0x02  enable_vdcmd      (vendor-cmd mode toggle)
+                            0x06  ?  (small count, paired with enable_vdcmd)
+                            0xC6  RTS5409S vendor write transaction (raw I²C)
+                            0xC8  flash read         (256 addresses × 2 flags × 3 passes
+                                                      = the 1,536 reads at start)
+                            0xD6  erase / status poll family
+                            0xE1  ?  (configuration)
+                            0xF1  SRAM write         (the 13,312-call write loop)
+                            0xF3  status poll        (the 87,352 tight-loop polls)
+                            0xF4  ?  (write-loop init)
+                            0xF5  ?  (write-loop init)
+                            0xA8  reboot             (per librtburn, but unconfirmed
+                                                      on this code path)
+   2     1    subcmd byte   command-specific
+   3     1    arg byte      command-specific (often a flag bit / counter)
+   4     1    pad           zero
+   5-6   2    vendor sig    0xDA 0x0B  (RealTek vendor ID 0x0BDA, little-endian)
+                            Acts as a magic sanity check for the device firmware.
+   7     1    pad           zero (possibly second flags byte)
+   8+    184  payload       command-specific data (firmware bytes for 0xF1, etc.)
+```
+
+**Worked example — frame 70866** (the `enable_vdcmd` call):
+```
+captured: 40 02 01 00 da 0b 00 00  00 00 ... (zeros to 192)
+          │  │  │  │  └──┘           
+          │  │  │  │   └─ vendor sig 0x0BDA (RealTek)
+          │  │  │  └──── pad
+          │  │  └─────── flags = 1 (one of the two bool args)
+          │  └────────── opcode 0x02 = enable_vdcmd
+          └───────────── direction 0x40 = WRITE
+```
+
+Disassembly produced exactly this layout:
+```c
+buf[0..1] = 0x4000;          // little-endian: buf[0]=0x00 (report ID), buf[1]=0x40
+buf[2]    = 0x02;            // opcode = enable_vdcmd
+buf[3]    = (a + 2*b);       // packed bool flags
+buf[5..6] = 0x0BDA;          // RealTek vendor sig (LE: DA 0B)
+// then send_vendor_cmd(buf, "enable_vdcmd")  ← debug name string
+```
+
+The command name "enable_vdcmd" is even passed alongside the buffer to a
+helper that logs it on errors — confirming this is a *named* protocol
+operation, not just opaque bytes.
+
+**Worked example — frame 435330** (the per-block flash write):
+```
+captured: 40 f1 80 7d  00 00 80 00  [184 bytes of firmware data]
+          │  │  │  │   pad      
+          │  │  │  └───── low address byte (block index, sweeps 0x00–0xFF)
+          │  │  └──────── high flag (0x80 = upper half of block,
+          │  │                       0x00 = lower half — pair per block)
+          │  └─────────── opcode 0xF1 = SRAM_write
+          └────────────── direction 0x40 = WRITE
+```
+
+The vendor-sig bytes at offsets 5-6 are zeros here, suggesting that the
+sig-check is enable_vdcmd-specific and not present on every command.
+Confirming this is a follow-up.
+
+#### Implications for the plugin code
+
+Three concrete primitives are sufficient to drive the entire flash:
+
+```c
+// Wire-level: send a vendor command (any opcode), get response.
+fu_dell_monitor_rt_vcmd(FuDevice *dev, guint8 opcode,
+                        guint8 sub, guint8 arg, const guint8 *data,
+                        gsize data_len, GError **err);
+
+// Per-opcode helpers wrap fu_dell_monitor_rt_vcmd:
+fu_dell_monitor_rt_enable_vdcmd(FuDevice *dev, gboolean a, gboolean b);
+fu_dell_monitor_rt_sram_write_chunk(FuDevice *dev, guint8 block_lo,
+                                    gboolean upper_half,
+                                    const guint8 *chunk, gsize chunk_len);
+fu_dell_monitor_rt_status_poll(FuDevice *dev, guint8 *status_out);
+fu_dell_monitor_rt_erase(FuDevice *dev, guint8 erase_subcmd);
+```
+
+The existing `realtek-mst` plugin in fwupd already has the SRAM-staged
+write loop and erase polling at exactly this level of abstraction; the
+work is largely about plugging this transport in beneath that loop.
+
 #### Open follow-ups for this section
 
-- [ ] Decode the precise byte layout of `IIC_INTF::write(reg, addr, buf)`
-      → 192-byte report (i.e., where in the report each I²C-level field
-      lands). Currently a hypothesis: byte 0 = direction, byte 1 = reg,
-      bytes 2-3 = addr (big-endian), bytes 4+ = data. Need to confirm
-      against captured frames.
-- [ ] Identify which opcodes correspond to the bootloader-enter
-      command (`04 08 02 00 01` with cmd-class `0x04`). Likely a
-      `RTS5409s_*` method, possibly outside `_IIC_API` (different
-      transport for the hub-itself entry vs. the scaler updates).
-- [ ] Confirm the `40 d6 …` family maps to `bit_polling` operations
-      against specific FL5500 status registers.
-- [ ] Walk `FL5500_IIC_ISP::isp()` end-to-end to extract the canonical
-      flash sequence and align it with the per-phase pcap timeline.
+- [ ] Identify the precise opcodes for: bootloader-enter
+      (the one-off `04 08 02 00 01` to addr 17 — different
+      command-class entirely), `0xE1` configure, and the `40 c6` that
+      `RTS5409S_HID::write` emits (does it ever appear under load?).
+- [ ] Walk `FL5500_IIC_ISP::isp()` to extract the canonical update
+      sequence as a single annotated function trace.
+- [ ] Decode the response payload of `0xC0 F3` (the polling response)
+      to figure out what the host is checking for between writes.
+- [ ] Confirm that the vendor-sig bytes (offsets 5-6) are only on
+      `enable_vdcmd`-class commands and not on flash writes.
 - [ ] Identify which other hub-IC classes (`Mchp58xx_72xx_ISP`,
-      `PS5512_IIC_ISP`, `Rts5418e_ISP`) ship in libhub.so and might
-      give us "free" support for other Dell monitor models that share
-      this Wistron updater architecture.
+      `PS5512_IIC_ISP`, `Rts5418e_ISP`) might give us "free" support
+      for other Dell monitor models with the same Wistron architecture.
 
 ### Per-phase timeline of the captured update
 
