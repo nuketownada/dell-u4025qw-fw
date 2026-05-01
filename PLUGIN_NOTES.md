@@ -723,27 +723,81 @@ void cal_auth(const uint8_t challenge[16], uint8_t response[8]) {
 }
 ```
 
-The 8-byte `key[]` is computed *once* at device-open time by
-`RTS5409S_HID::get_synkey()` from a buffer at object offset `0x18`
-that's populated by the application before `open()` is called (likely
-out of a per-product config blob). Reverse-engineering `get_synkey`'s
-buffer source is annoying — but for the U4025QW we don't need to,
-because **we recovered the key empirically** from the captured
-challenge/response pairs:
+The 8-byte `key[]` is derived at device-open time by
+`RTS5409S_HID::get_synkey()` from a buffer at object offset `0x18`,
+which is populated by the application before `open()` is called.
+
+**`get_synkey` decoded** (from `RTS5409S_HID::get_synkey()` in
+`libdevices.so` at `0xb8570`). The function walks a per-product seed
+buffer and produces the 8-byte key. Three actions per byte, gated on
+bits 0 and 4 of the byte:
 
 ```c
+/* seed: per-product blob.  out: 8-byte cal_auth key. */
+void get_synkey(const uint8_t *seed, size_t seed_len, uint8_t out[8]) {
+    size_t in = 0, op = 0;
+    memset(out, 0, 8);
+    while (in < seed_len && op < 8) {
+        uint8_t b = seed[in], bits = b & 0x11;
+        if (bits == 0x01 || bits == 0x10) {           /* FAST */
+            if (in + 1 >= seed_len) break;
+            out[op++] = b ^ seed[in + 1];
+            in += 2;
+        } else if (bits == 0x11) {                    /* SLOW */
+            if (in + 2 >= seed_len) break;
+            if (op     < 8) out[op]     = b              ^ seed[in + 1];
+            if (op + 1 < 8) out[op + 1] = seed[in + 2]   ^ seed[in + 1];
+            op += 2;
+            in += 3;
+        } else {                                      /* SKIP */
+            in += 1;
+        }
+    }
+}
+```
+
+The seed buffer flows from the application to `RTS5409S_HID`'s vector
+through a chain of generic plugin calls in libdevices/libhub:
+
+```
+main "Firmware Updater" binary
+  reads ./cert.dat (an 18-byte per-product blob, despite the name)
+  ↓
+  libdevices.so::load(data, len)        // libdevices's plugin entry point
+  ↓
+  IIC_INTF::load(vector<uint8_t>)       // forwards to inner HID
+  ↓
+  HID_INTF::load(vector<uint8_t>)       // assigns to vector at this+0x18
+  ↓
+  next call to RTS5409S_HID::open(...)
+  ↓
+  get_synkey() runs on the now-populated buffer → key at this+0x21A
+  ↓
+  hub_force_handshake() uses key in cal_auth
+```
+
+**For the U4025QW**, `cert.dat` contains exactly:
+```
+F8 B7 FD 21 E0 32 22 B8  A9 E8 7C 11 04 94 E2 9D  9F 6A
+```
+which `get_synkey` reduces to:
+```c
 static const uint8_t U4025QW_HUB_KEY[8] = {
-    0x4F, 0xDC, 0xC1, 0x10, 0x11, 0x6D, 0x76, 0x02
+    0x4F, 0xDC, 0xC1, 0x10, 0x11, 0x6D, 0x76, 0x02,
 };
 ```
 
-Verified across 4 captured handshake cycles in the pcap (frames 7704,
-7996, 8122, 8148 — challenge response pairs all yield the same key).
-The key is per-product (per-monitor-model, almost certainly), not
-per-device, since `get_synkey` runs from a buffer that depends only
-on what the GUI loaded for this monitor. To support a second monitor
-model later we either repeat the capture-and-recover trick on that
-model, or finally bother to reverse `get_synkey`'s seed source.
+Verified two ways: (a) recovered empirically by XOR'ing the algorithm's
+unkeyed output against actual responses in 4 captured handshake cycles
+(frames 7704, 7996, 8122, 8148), and (b) reproduced from `cert.dat` by
+running our reimplementation of `get_synkey` over the file. The two
+agree byte-for-byte.
+
+**For other Dell monitors**, just swap the `cert.dat` blob — same
+algorithm. The eventual right home for the seed is inside the LVFS
+firmware payload (alongside the `.upg` for the same monitor) so that
+it ships with each update and we don't need to track per-model blobs
+in plugin source.
 
 #### Implications for the plugin code
 
@@ -1198,10 +1252,14 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   hub MCU's *own* firmware revision, not the user-facing M3T105 string
   (which lives on the FL5500 scaler — see "blocked" below).
 
-- **I²C tunnel end-to-end (HID-A).** As of the latest commit the
-  `0xE1` auth handshake (`cal_auth` algorithm + the recovered 8-byte
-  product key for the U4025QW) is implemented. With the handshake in
-  place, the plugin successfully:
+- **`cal_auth` key derived from first principles.** The plugin no
+  longer hard-codes the U4025QW key; it embeds Dell's `cert.dat` blob
+  verbatim and runs our `get_synkey` reimplementation over it at
+  device setup, producing the same 8-byte key Dell's binary derives.
+  Plumbing for swapping `cert.dat` per-monitor is trivial — the seed
+  byte array is the only model-specific input.
+- **I²C tunnel end-to-end (HID-A).** With the derived key fed into
+  the `0xE1` handshake, the plugin successfully:
   1. Sends a DDC/CI request through the `0xC6` write opcode
      (`51 84 c0 99 ee 20 2c` — Dell's first phase-1 register read).
   2. Sleeps 50 ms (the FL5500 needs time to compose its reply).
