@@ -1235,10 +1235,13 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
 - **Build & load.** Plugin builds against fwupd 2.0.16 inside the
   `nix develop` shell; `fwupdtool get-plugins` lists `dell_monitor_rt`
   after `fwupd-stage-quirks` has been run.
-- **Device detection.** Both HID interfaces of the U4025QW are matched
-  by the quirk file (`HIDRAW\VEN_0BDA&DEV_1100` and `…&DEV_1101`) and
-  surface as two FuDevices: "U4025QW (HID-A)" and "U4025QW (HID-B)".
-  De-duplication into a single logical device is deferred.
+- **Device detection.** The plugin matches only the upstream hub MCU's
+  HID interface (`HIDRAW\VEN_0BDA&DEV_1100`) and surfaces it as a
+  single FuDevice named `U4025QW`. The monitor exposes a second HID
+  interface (`DEV_1101`) which appears to belong to the dock-side
+  Ethernet MCU (the U4025QW has a built-in Ethernet port — that
+  controller has its own firmware and HID interface). Its update path
+  is a separate problem and we don't enumerate it for now.
 - **`enable_vdcmd` (opcode 0x02).** SET_REPORT with the RealTek vendor
   signature (`DA 0B`) at wire bytes 5-6 is accepted on both interfaces.
   Earlier wire-format mistakes (sig at 4-5 instead of 5-6) are fixed.
@@ -1247,10 +1250,10 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   (`C0 09 00 00 00 00 20 …`) and pulls the response via the
   `HIDIOCGINPUT` ioctl — *not* fwupd's `fu_hidraw_device_get_report`,
   which is misnamed and reads the interrupt-IN endpoint. Output for our
-  monitor: `hub-2.04` (HID-A) and `hub-2.06` (HID-B), matching the
-  `"%X.%02X"` format string in `libdevices.so`. This is the RealTek
-  hub MCU's *own* firmware revision, not the user-facing M3T105 string
-  (which lives on the FL5500 scaler — see "blocked" below).
+  monitor's main hub MCU: `2.04`, matching the `"%X.%02X"` format
+  string in `libdevices.so`. This is the RealTek hub MCU's *own*
+  firmware revision; we log it as a diagnostic and use the M3T105
+  user-facing string (read separately) as the device version.
 
 - **`cal_auth` key derived from first principles.** The plugin no
   longer hard-codes the U4025QW key; it embeds Dell's `cert.dat` blob
@@ -1258,7 +1261,7 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   device setup, producing the same 8-byte key Dell's binary derives.
   Plumbing for swapping `cert.dat` per-monitor is trivial — the seed
   byte array is the only model-specific input.
-- **I²C tunnel end-to-end (HID-A).** With the derived key fed into
+- **I²C tunnel end-to-end.** With the derived key fed into
   the `0xE1` handshake, the plugin successfully:
   1. Sends a DDC/CI request through the `0xC6` write opcode.
   2. Sleeps 50 ms (the FL5500 needs time to compose its reply).
@@ -1280,18 +1283,30 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
   | `c0 99 ab 20` | `B7LM884` | Board / MCU code |
   | `c0 01 e6 00` | 2-byte status | DDC/CI feature flag |
 
-  `fwupdtool get-devices` now reports the HID-A interface as
+  `fwupdtool get-devices` now reports the device as
   `Current version: M3T105`.
+
+### Notes — two HID interfaces, two MCUs
+
+The U4025QW's USB enumeration shows two `0bda:11xx` HID interfaces on
+different sub-paths of its internal hub:
+
+- `DEV_1100` (path `…/3-1.4.1.5`): the upstream RTS5409S hub MCU.
+  Hub-version read returns `2.04`. cal_auth handshake works. I²C tunnel
+  to FL5500 works. Where the M3T105 update flows. This is what we
+  match in our quirk.
+- `DEV_1101` (path `…/3-1.4.2.4`): a secondary MCU (probably the
+  dock-side Ethernet controller — the U4025QW has a built-in RJ45).
+  Hub-version read returns `2.06`. cal_auth handshake STALLs even
+  in isolation, so it's a different protocol gate (or no gate, just
+  no support for the same opcodes). We don't enumerate it.
+
+If a future Dell monitor also needs Ethernet-controller updates we'd
+add a second match entry and a second device class — but that's a
+clean greenfield problem, not a dedup problem.
 
 ### Blocked
 
-- **HID-B (DEV_1101) handshake.** When the plugin runs `setup()` on
-  *both* HID interfaces back-to-back, HID-A succeeds end-to-end but
-  HID-B's `0xE1` request STALLs (`wrote -1 of 193`). Likely cause:
-  the two interfaces share the same upstream-hub MCU state and our
-  back-to-back use confuses it. Either we deduplicate the two
-  interfaces into a single logical FuDevice (the eventual right
-  answer) or we serialize and reset between them.
 - **Erase / write / status-poll path on the FL5500.** Wire formats
   are already documented in PLUGIN_NOTES, but the actual sequencing
   (handshake-per-write-burst, polling cadence, etc.) needs to be
@@ -1301,11 +1316,9 @@ Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monit
 
 ### Next milestone
 
-1. Deduplicate the two HID interfaces into a single FuDevice (so we
-   don't double-handshake the same physical hub MCU).
-2. Implement the bootloader-enter `04 08 02 00 01` opcode and the
+1. Implement the bootloader-enter `04 08 02 00 01` opcode and the
    re-enumeration wait.
-3. Implement `0xF1` SRAM-write loop with `0xF3` status polling — the
+2. Implement `0xF1` SRAM-write loop with `0xF3` status polling — the
    actual flash-write code path. We have wire formats for both.
 
 ### Plugin file layout (current)
