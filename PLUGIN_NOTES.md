@@ -537,12 +537,28 @@ offset  size  field         meaning
    1     1    opcode        vendor command opcode
                             ──────────────────────
                             0x02  enable_vdcmd      (vendor-cmd mode toggle)
-                            0x06  ?  (small count, paired with enable_vdcmd)
-                            0xC6  RTS5409S vendor write transaction (raw I²C)
+                            0x06  enable_high_clock (paired with enable_vdcmd; sub=01
+                                                      to enable, sub=00 to close)
+                            0x09  get_self_fw_version (hub MCU's *own* firmware
+                                                      revision; READ via HIDIOCGINPUT.
+                                                      Verified working in plugin —
+                                                      returns "%X.%02X" hex format.)
+                            0xC6  I²C tunnel WRITE   (sends bytes onto the monitor's
+                                                      internal I²C bus to a 7/8-bit
+                                                      target — usually DDC/CI 0x6E,
+                                                      sometimes 0x94 for the FL5500.
+                                                      Gated by the 0xE1 handshake;
+                                                      see "I²C tunnel" subsection.)
                             0xC8  flash read         (256 addresses × 2 flags × 3 passes
                                                       = the 1,536 reads at start)
-                            0xD6  erase / status poll family
-                            0xE1  ?  (configuration)
+                            0xD6  I²C tunnel READ /  (companion to 0xC6, also gated
+                                  status poll family  by the 0xE1 handshake)
+                            0xE1  auth handshake     (challenge/response — required
+                                                      before the device will accept any
+                                                      0xC6 / 0xD6 traffic; sub 0x01
+                                                      requests challenge, sub 0x03
+                                                      sends 8-byte response. Algorithm
+                                                      not yet decoded.)
                             0xF1  SRAM write         (the 13,312-call write loop)
                             0xF3  status poll        (the 87,352 tight-loop polls)
                             0xF4  ?  (write-loop init)
@@ -596,6 +612,138 @@ captured: 40 f1 80 7d  00 00 80 00  [184 bytes of firmware data]
 The vendor-sig bytes at offsets 5-6 are zeros here, suggesting that the
 sig-check is enable_vdcmd-specific and not present on every command.
 Confirming this is a follow-up.
+
+**Worked example — I²C tunnel WRITE (frames 7710 / 8028 / 8154 / …):**
+
+Decoded directly from the pcap (every `40 c6 …` frame in phase 1 has
+this layout; the data tail is the only varying part):
+```
+captured: 40 c6 00 00 00 00 07 00  6e 00 00 00 00 00 00 00
+          │  │              │      │
+          │  │              │      └─ I²C target (8-bit address, here 0x6E
+          │  │              │         = DDC/CI display address). Other
+          │  │              │         observed targets: 0x94 (FL5500 alt)
+          │  │              └─ I²C transaction length (here 7 bytes follow)
+          │  └─ opcode 0xC6 = I²C tunnel WRITE
+          └─ direction 0x40 = WRITE
+          ... (zeros to offset 64) ...
+offset 64: 51 84 c0 99 ee 20 2c    [I²C payload, `len` bytes]
+           │  │  └─────────┘  │
+           │  │     │         └─ DDC/CI checksum (XOR from 0x6E onward)
+           │  │     └─ 4-byte DDC/CI command body
+           │  └─ DDC/CI message length (0x80 | data_count)
+           └─ DDC/CI source address (host = 0x51)
+```
+
+Full byte map of the 192-byte payload for `0xC6` and (verified
+identical) `0xD6`:
+```
+offset  size  field         meaning
+   0     1    direction     0x40 = WRITE  (0xC0 = READ — but I²C tunnel
+                            uses 0x40 even for the READ-side opcode 0xD6;
+                            the kernel pulls the response via HIDIOCGINPUT
+                            after the request, not via a 0xC0 framing)
+   1     1    opcode        0xC6 = I²C write, 0xD6 = I²C read/poll
+   2-5   4    pad           all zero in observed frames
+   6     1    i2c_len       number of payload bytes the device should put
+                            on the I²C bus (write opcode) or read from it
+                            (read opcode). Observed values: 7 for DDC/CI
+                            requests, 0x40 (=64) for the matching response
+                            puller, 2 for the closing reboot command.
+   7     1    pad           zero
+   8     1    i2c_target    8-bit I²C address. 0x6E = DDC/CI display.
+                            0x94 appears in the final reboot frame
+                            (frame 875350: `40 c6 … 02 00 94 00 01`).
+   9     1    pad           zero
+  10     1    bus_speed     0x00 = default. Higher values not observed in
+                            phase 1; possibly unused on this part.
+  11-63  53   pad           all zero
+  64+    128  payload       the actual I²C bytes (`i2c_len` of them).
+                            For DDC/CI traffic this starts with 0x51
+                            (host source addr) and ends with the DDC/CI
+                            checksum byte.
+```
+
+This layout is what the plugin's `fu_dell_monitor_rt_device_i2c_write`
+and `…_i2c_read` already encode. The wire format is correct; what's
+missing is the 0xE1 auth handshake that *precedes* every I²C tunnel
+exchange — see "I²C tunnel auth handshake" below.
+
+**I²C tunnel auth handshake (opcode 0xE1) — currently blocking us:**
+
+In every observed pcap cycle, the host sends two `0xE1` frames *between*
+`enable_high_clock` and the first `0xC6`:
+
+```
+40 e1 01 01 00 00 00 00  …   request — payload all zero
+40 e1 03 00 00 00 00 00  … (offset 64) <8 bytes that change every cycle>
+```
+
+The 8-byte tail in the second frame differs every cycle (samples seen:
+`7b 06 b6 01 df 03 e0 75`, `e1 7d b9 0e 17 4e 67 c5`, `dd 24 96 20 78 6d
+b2 01`, `d9 0f 23 af a5 0a 62 22`, …). The device evidently issues a
+fresh challenge each cycle and the host must compute a response. Without
+this handshake the kernel STALLs subsequent `0xC6` writes (we tested
+this in the plugin: `wrote -1 of 193`).
+
+**Implication.** Before *any* I²C-tunneled work — scaler version read,
+flash erase, flash write, status poll on the FL5500 — the plugin must:
+
+1. Send `40 e1 01 01 …` (request a challenge).
+2. Read back the device's 16-byte challenge via `HIDIOCGINPUT`. (The
+   pcap shows the host issuing two GET_REPORTs back-to-back: the first
+   returns *stale* data left over from the previous I²C-tunnel reply;
+   the second returns the actual fresh challenge. The cleanest way to
+   handle this in the plugin is to issue a single GET_REPORT *immediately
+   after* the `40 e1 01 01` SET_REPORT and trust that the device has
+   already latched the challenge by then.)
+3. Compute the 8-byte response with `cal_auth` (decoded below).
+4. Send `40 e1 03 00 …` with the 8-byte response at offset 64.
+5. Then issue the desired `0xC6` / `0xD6` traffic.
+
+**`cal_auth` decoded** (from `RTS5409S_HID::cal_auth` in
+`libdevices.so` at `0xb8640`). Pure C, no crypto library needed:
+
+```c
+/* challenge: 16 bytes from the device. response: 8 bytes back to it. */
+void cal_auth(const uint8_t challenge[16], uint8_t response[8]) {
+    uint16_t mix = ((uint16_t)challenge[0] << 8) | challenge[15];
+    int parity_even = !(__builtin_popcount(mix) & 1);
+    uint8_t tmp[8];
+    if (parity_even) {
+        memcpy(tmp, &challenge[8], 8);
+        unsigned idx = challenge[6] & 7;
+        tmp[idx] ^= challenge[idx];          /* mix from low half */
+    } else {
+        memcpy(tmp, &challenge[0], 8);
+        unsigned idx = challenge[14] & 7;
+        tmp[idx] ^= challenge[idx + 8];      /* mix from high half */
+    }
+    for (int i = 0; i < 8; i++) response[i] = tmp[i] ^ key[i];
+}
+```
+
+The 8-byte `key[]` is computed *once* at device-open time by
+`RTS5409S_HID::get_synkey()` from a buffer at object offset `0x18`
+that's populated by the application before `open()` is called (likely
+out of a per-product config blob). Reverse-engineering `get_synkey`'s
+buffer source is annoying — but for the U4025QW we don't need to,
+because **we recovered the key empirically** from the captured
+challenge/response pairs:
+
+```c
+static const uint8_t U4025QW_HUB_KEY[8] = {
+    0x4F, 0xDC, 0xC1, 0x10, 0x11, 0x6D, 0x76, 0x02
+};
+```
+
+Verified across 4 captured handshake cycles in the pcap (frames 7704,
+7996, 8122, 8148 — challenge response pairs all yield the same key).
+The key is per-product (per-monitor-model, almost certainly), not
+per-device, since `get_synkey` runs from a buffer that depends only
+on what the GUI loaded for this monitor. To support a second monitor
+model later we either repeat the capture-and-recover trick on that
+model, or finally bother to reverse `get_synkey`'s seed source.
 
 #### Implications for the plugin code
 
@@ -1023,6 +1171,106 @@ The file `/home/vsts/work/1/s/parade_ps5512/ps5512_vdcmd.cpp`
       out-of-tree plugin distributed separately.
 
 ---
+
+## Plugin status — what works today
+
+Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monitor-rt/`.
+
+### Working
+
+- **Build & load.** Plugin builds against fwupd 2.0.16 inside the
+  `nix develop` shell; `fwupdtool get-plugins` lists `dell_monitor_rt`
+  after `fwupd-stage-quirks` has been run.
+- **Device detection.** Both HID interfaces of the U4025QW are matched
+  by the quirk file (`HIDRAW\VEN_0BDA&DEV_1100` and `…&DEV_1101`) and
+  surface as two FuDevices: "U4025QW (HID-A)" and "U4025QW (HID-B)".
+  De-duplication into a single logical device is deferred.
+- **`enable_vdcmd` (opcode 0x02).** SET_REPORT with the RealTek vendor
+  signature (`DA 0B`) at wire bytes 5-6 is accepted on both interfaces.
+  Earlier wire-format mistakes (sig at 4-5 instead of 5-6) are fixed.
+- **`enable_high_clock` (opcode 0x06 sub 0x01).** Accepted, no payload.
+- **Hub MCU version read (opcode 0x09).** Sends a READ-direction frame
+  (`C0 09 00 00 00 00 20 …`) and pulls the response via the
+  `HIDIOCGINPUT` ioctl — *not* fwupd's `fu_hidraw_device_get_report`,
+  which is misnamed and reads the interrupt-IN endpoint. Output for our
+  monitor: `hub-2.04` (HID-A) and `hub-2.06` (HID-B), matching the
+  `"%X.%02X"` format string in `libdevices.so`. This is the RealTek
+  hub MCU's *own* firmware revision, not the user-facing M3T105 string
+  (which lives on the FL5500 scaler — see "blocked" below).
+
+- **I²C tunnel end-to-end (HID-A).** As of the latest commit the
+  `0xE1` auth handshake (`cal_auth` algorithm + the recovered 8-byte
+  product key for the U4025QW) is implemented. With the handshake in
+  place, the plugin successfully:
+  1. Sends a DDC/CI request through the `0xC6` write opcode
+     (`51 84 c0 99 ee 20 2c` — Dell's first phase-1 register read).
+  2. Sleeps 50 ms (the FL5500 needs time to compose its reply).
+  3. Pulls the response via `0xD6` + `HIDIOCGINPUT`.
+
+  The reply matches Dell's captured response byte-for-byte:
+  ```
+  device:   51 90 c1 99 37 35 33 2e 30 41 4b 30 31 2e 30 30 30 37 c4
+  pcap:     51 90 c1 99 37 35 33 2e 30 41 4b 30 31 2e 30 30 30 37 c4   (frame 7995)
+  ```
+  ASCII payload = `"753.0AK01.0007"` (a panel-ID string, not the
+  user-facing M3T105 — but the value isn't the point; the point is
+  that the tunnel reproduces Dell's protocol exactly).
+
+  `fwupdtool get-devices` now reports the HID-A interface as
+  `Current version: hub-2.04+scaler-753.0AK01.0007`.
+
+### Blocked
+
+- **HID-B (DEV_1101) handshake.** When the plugin runs `setup()` on
+  *both* HID interfaces back-to-back, HID-A succeeds end-to-end but
+  HID-B's `0xE1` request STALLs (`wrote -1 of 193`). Likely cause:
+  the two interfaces share the same upstream-hub MCU state and our
+  back-to-back use confuses it. Either we deduplicate the two
+  interfaces into a single logical FuDevice (the eventual right
+  answer) or we serialize and reset between them.
+- **The DDC/CI register that carries the user-facing M3T105 version.**
+  We can read panel-ID-ish strings, but we don't yet know which
+  DDC/CI command id (`0x99 ?? ??` triplet) returns "M3T105". A short
+  follow-up task: replay all four `40 c6` reads from phase 1 of the
+  pcap and decode the responses.
+- **Erase / write / status-poll path on the FL5500.** Wire formats
+  are already documented in PLUGIN_NOTES, but the actual sequencing
+  (handshake-per-write-burst, polling cadence, etc.) needs to be
+  pulled from the disassembly of `FL5500_IIC_API::write_burst` and
+  friends. None of this is *blocked* now that the tunnel works —
+  it's just remaining work.
+
+### Next milestone
+
+1. Deduplicate the two HID interfaces into a single FuDevice (so we
+   don't double-handshake the same physical hub MCU).
+2. Implement the bootloader-enter `04 08 02 00 01` opcode and the
+   re-enumeration wait.
+3. Implement `0xF1` SRAM-write loop with `0xF3` status polling — the
+   actual flash-write code path. We have wire formats for both.
+
+### Plugin file layout (current)
+
+```
+plugins/dell-monitor-rt/
+├── dell-monitor-rt.quirk            quirk-based hidraw enumeration
+├── fu-dell-monitor-rt-device.{h,c}  FuHidrawDevice subclass with all
+│                                    primitives (vcmd, vcmd_read,
+│                                    i2c_write, i2c_read,
+│                                    read_version, read_scaler_version)
+├── fu-dell-monitor-rt-plugin.{h,c}  registers the device gtype
+└── meson.build                      registers the plugin in the fwupd
+                                     build
+```
+
+The fork's flake.nix provides:
+
+- `fwupd-configure` — one-time meson setup with the right options.
+- `fwupd-stage-quirks` — rebuilds `builtin.quirk.gz` and stages it into
+  `build/_local/lib/fwupd/quirks.d/` so iterative `meson compile -C build`
+  cycles see the latest quirk.
+- `nix build` — full clean fwupd derivation with our plugin baked in,
+  inheriting nixpkgs' build closure via `inputsFrom`.
 
 ## Reference material on this machine
 
