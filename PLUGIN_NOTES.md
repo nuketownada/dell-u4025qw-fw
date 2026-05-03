@@ -164,6 +164,56 @@ The protocol verifies signatures on-device via `librtburn.so::hid_CheckECDSA`.
 The 96-byte ASCII blocks in the `.upg` are the right size for raw-encoded
 SHA-384 ECDSA signatures.
 
+#### Verification model: chip-side, confirmed (2026-05-02)
+
+Verified empirically against `captures/u4025qw-update-recap-20260502-185321.pcapng`
+(a fresh full-update capture on usbmon3): the chip's bank-switch / commit
+code performs the signature verify itself, NOT the host. Smoking gun is
+a **full second of zero traffic on the monitor's HID device** between the
+last `SET_REPORT` of the bulk-write phase and the final commit-trigger
+`SET_REPORT`:
+
+```
++0.000s  SET_REPORT  40 c6 00 00 00 00 02 00 94 00 01 00 …  (write block N)
++0.001   SET_REPORT  40 d6 6f 00 00 00 01 00 94 01 01 00 …  (commit-ready signal)
++0.001   GET_REPORT  ← chip OK
++0.000   (1.000 SECONDS OF SILENCE on this device — chip computes verify)
++1.000   SET_REPORT  40 c6 00 00 00 00 02 00 94 00 01 00 … ee 02   (commit / reset trigger)
++1.001   SET_REPORT_RESPONSE                                        (instant ack — chip already done)
++1.077   URB_INTERRUPT IN                                           (disconnect — chip rebooting)
+```
+
+If the host were doing a host-side verify (reading the staged bank back over
+HID and ECDSA-verifying locally) we'd see hundreds-of-thousands of bulk-read
+frames in that 1-second window. There are zero. The chip is doing all the
+crypto internally. ~1 second is consistent with secp384r1 ECDSA on a slow
+hub MCU CPU.
+
+That makes `librtburn.so::hid_CheckECDSA` a thin host wrapper: it issues a
+short vendor command (almost certainly the `40 c6 …` or `40 d6 …` SET_REPORT
+in the dense pre-gap region) and reads the chip's status byte back via
+GET_REPORT. The host never sees the firmware bytes after they're written
+to the chip's flash bank.
+
+**Implications for the fwupd plugin:**
+
+* The brick risk during plugin development is much lower than worst-case —
+  the chip will reject our firmware if signature verification fails (taking
+  the ~1s pause and then NOT swapping banks), rather than silently
+  committing garbage and bricking on next boot. We still want the
+  emulation-replay safety net (see "Pre-flight emulation harness" below)
+  but it's belt-and-suspenders, not life-or-death.
+* The plugin doesn't need to do its own signature check before sending
+  bytes — the chip does that. We just need to honour the protocol's
+  multi-stage flow: stream blocks → wait for chip's "commit-ready" status
+  → issue the trigger → expect a reset/disconnect → reconnect to the
+  rebooted device.
+* Real chain of trust is anchored in chip ROM (whatever signing pubkey
+  RealTek burns into the RTS5409S at fab — not recoverable by us, not
+  needed by us), separate from Dell's per-bundle wrapper signature on
+  the .upg payload. Dell's wrapper is for transport integrity; the chip's
+  on-device ECDSA is what protects against actual flash tampering.
+
 ### 3. USB / udev
 
 The U4025QW exposes two HID-class interfaces relevant to firmware update on
