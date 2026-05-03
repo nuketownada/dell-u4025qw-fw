@@ -7,18 +7,23 @@ fwupd device emulation file format (a ZIP archive containing per-phase
 JSON snapshots of backend state) so the fwupd dell-monitor-rt plugin
 can be exercised without a real device attached.
 
-STATUS — first cut, NOT yet replay-ready. Currently emits events in the
-`ControlTransfer:Direction=…,RequestType=…,Recipient=…,Request=…,Value=…,
-Idx=…,Data=…,Length=…` format produced by FuUsbDevice. That matches what
-a libusb-based FuUsbDevice or FuHidDevice plugin would lookup at replay
-time, but our plugin (FuDellMonitorRtDevice) is a FuHidrawDevice
-subclass — it goes through /dev/hidraw via fu_udev_device_write/read,
-which produces `Write:Data=…,Length=…` and `Read:Length=…` events
-instead. To make this file actually replay, the per-event emission below
-needs to be swapped to those formats. The pcap data needed is identical
-(the 192-byte payload, no setup header — the kernel constructs the
-setup packet); only the event_id string and the placement of the response
-data change. Tracked as a follow-up.
+Targets the FuHidrawDevice IO model — our plugin's
+FuDellMonitorRtDevice inherits from FuHidrawDevice and does its IO via
+fu_hidraw_device_set_report (kernel /dev/hidraw write()) and
+HIDIOCGINPUT ioctl (the kernel hidraw API for HID GET_REPORT on INPUT
+reports). The pcap captures the same operations one layer down (USB
+SET_REPORT/GET_REPORT control transfers, since the kernel translates
+hidraw write/ioctl into those on the wire), so we strip off the setup
+packet and re-emit each transfer in the form FuHidrawDevice would have
+produced if it had been doing the IO itself:
+
+  HID class SET_REPORT (OUTPUT) → "Write:Data={base64},Length=0x{n}"
+  HID class GET_REPORT (INPUT)  → "Ioctl:Request=0x4807,Data={zeros base64},
+                                   Length=0x{n}"  with `DataOut` carrying
+                                   the actual response payload.
+
+FEATURE-report SET/GET (HIDIOCSFEATURE/HIDIOCGFEATURE) and bulk transfers
+are not yet handled — we haven't observed either in the U4025QW capture.
 
 Specifically targets the U4025QW HID interfaces at VID 0x0bda PID
 0x1100 / 0x1101 plus the bootloader-mode device(s) the monitor
@@ -195,31 +200,48 @@ def b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-def event_id_for_control(setup: bytes, payload_out: bytes, length: int) -> str:
-    """Build the fwupd ControlTransfer event_id from a setup packet + OUT
-    payload. For IN transfers `payload_out` is empty."""
-    bm_request_type, b_request, w_value, w_index, w_length = struct.unpack(
-        "<B B H H H", setup
-    )
-    direction = bm_request_type & 0x80
-    request_type = (bm_request_type >> 5) & 0x03
-    recipient = bm_request_type & 0x1F
+def event_id_for_hidraw_write(payload: bytes) -> str:
+    """SET_REPORT (OUTPUT) on /dev/hidraw via fu_udev_device_write produces:
+       Write:Data={base64},Length=0x{n}"""
+    return f"Write:Data={b64(payload)},Length=0x{len(payload):x}"
+
+
+# HIDIOCGINPUT(len) macro from <linux/hidraw.h>:
+#   _IOC(_IOC_READ|_IOC_WRITE, 'H', 0x07, len)
+# Lower 16 bits (which is what FuIoctl serialises in event_id) are
+# (type << 8) | nr = (0x48 << 8) | 0x07 = 0x4807, regardless of len.
+HIDIOCGINPUT_LOW16 = (ord("H") << 8) | 0x07
+
+
+def event_id_for_hidraw_get_input(response_len: int) -> str:
+    """HIDIOCGINPUT ioctl on /dev/hidraw via fu_ioctl_execute produces:
+       Ioctl:Request=0x4807,Data={base64 of `response_len` zero bytes},Length=0x{n}
+    The actual response payload goes in the event's `DataOut` field, not in
+    the event_id."""
+    zeros = bytes(response_len)
     return (
-        "ControlTransfer:"
-        f"Direction=0x{direction:02x},"
-        f"RequestType=0x{request_type:02x},"
-        f"Recipient=0x{recipient:02x},"
-        f"Request=0x{b_request:02x},"
-        f"Value=0x{w_value:04x},"
-        f"Idx=0x{w_index:04x},"
-        f"Data={b64(payload_out)},"
-        f"Length=0x{length:x}"
+        f"Ioctl:Request=0x{HIDIOCGINPUT_LOW16:04x},"
+        f"Data={b64(zeros)},"
+        f"Length=0x{response_len:x}"
     )
+
+
+SETUP_REQ_GET_DESCRIPTOR = 0x06       # standard request
+HID_REQ_SET_REPORT = 0x09             # class request
+HID_REQ_GET_REPORT = 0x01             # class request
+HID_REPORT_TYPE_INPUT = 0x01          # high byte of wValue
+HID_REPORT_TYPE_OUTPUT = 0x02
+HID_REPORT_TYPE_FEATURE = 0x03
 
 
 def collect_devices(pcap: Path) -> tuple[dict[int, list[dict]], dict[int, dict]]:
     """Read the pcap once, pair S+C URBs, return per-devnum event lists +
-    per-devnum descriptor info gleaned from any GET_DESCRIPTOR transfers."""
+    per-devnum descriptor info. Events are in FuHidrawDevice format
+    (Write:/Ioctl:HIDIOCGINPUT) since our plugin uses /dev/hidraw, not
+    libusb. Only HID-class control transfers (SET_REPORT for OUTPUT
+    reports, GET_REPORT for INPUT reports) become hidraw events;
+    standard descriptor reads etc. are recorded for VID/PID extraction
+    but don't produce events for the replay."""
     pending: dict[int, dict] = {}  # urb_id → submit record
     events_per_dev: dict[int, list[dict]] = defaultdict(list)
     descriptor_info: dict[int, dict] = defaultdict(dict)
@@ -229,8 +251,6 @@ def collect_devices(pcap: Path) -> tuple[dict[int, list[dict]], dict[int, dict]]
         if rec is None:
             continue
         if rec["xfer_type"] != XFER_TYPE_CONTROL:
-            # We only care about control transfers (where SET/GET_REPORT live).
-            # Bulk traffic could be added in a follow-up.
             continue
         if rec["urb_type"] == "S":
             pending[rec["urb_id"]] = rec
@@ -238,40 +258,59 @@ def collect_devices(pcap: Path) -> tuple[dict[int, list[dict]], dict[int, dict]]
         if rec["urb_type"] != "C":
             continue
         submit = pending.pop(rec["urb_id"], None)
-        if submit is None:
+        if submit is None or submit["setup"] is None:
             continue
-        if submit["setup"] is None:
-            continue
-        # IN transfers carry payload in the completion record; OUT transfers
-        # carry it in the submission record.
-        bm_request_type = submit["setup"][0]
+
+        bm_request_type, b_request, w_value, w_index, w_length = struct.unpack(
+            "<B B H H H", submit["setup"]
+        )
         is_in = bool(bm_request_type & 0x80)
-        wlen = struct.unpack("<H", submit["setup"][6:8])[0]
-        if is_in:
-            payload_out = b""
-            response = rec["payload"][: rec["len_cap"]]
-        else:
-            payload_out = submit["payload"][: submit["len_cap"]]
-            response = b""
-        ev_id = event_id_for_control(submit["setup"], payload_out, wlen)
-        evt = {"Id": ev_id}
-        if is_in:
-            evt["Data"] = b64(response)
-        # Record the descriptor info from any GET_DESCRIPTOR transfer so we
-        # can populate the device's vendor/product ID in the JSON snapshot.
-        b_request = submit["setup"][1]
-        w_value = struct.unpack("<H", submit["setup"][2:4])[0]
-        if b_request == 0x06 and is_in and (w_value >> 8) == 0x01 and len(response) >= 14:
-            # Standard GET_DESCRIPTOR(DEVICE) - 18 bytes total
-            #   bLength, bDescriptorType, bcdUSB(2), bDeviceClass, bDeviceSubClass,
-            #   bDeviceProtocol, bMaxPacketSize0, idVendor(2), idProduct(2), ...
+        request_type = (bm_request_type >> 5) & 0x03  # 0=std, 1=class, 2=vendor
+
+        # Capture VID/PID from any standard GET_DESCRIPTOR(DEVICE) for
+        # downstream JSON metadata.
+        response = rec["payload"][: rec["len_cap"]]
+        if (
+            request_type == 0
+            and b_request == SETUP_REQ_GET_DESCRIPTOR
+            and is_in
+            and (w_value >> 8) == 0x01      # DEVICE descriptor
+            and len(response) >= 14
+        ):
             descriptor_info[submit["devnum"]]["VendorId"] = struct.unpack(
                 "<H", response[8:10]
             )[0]
             descriptor_info[submit["devnum"]]["ProductId"] = struct.unpack(
                 "<H", response[10:12]
             )[0]
-        events_per_dev[submit["devnum"]].append(evt)
+            continue  # not a hidraw event
+
+        # Only HID class requests with INPUT/OUTPUT reports become hidraw
+        # events. FEATURE reports map to HIDIOCSFEATURE / HIDIOCGFEATURE
+        # (different ioctl numbers — not yet handled here).
+        if request_type != 1:
+            continue
+        report_type = w_value >> 8
+        if (
+            b_request == HID_REQ_SET_REPORT
+            and not is_in
+            and report_type == HID_REPORT_TYPE_OUTPUT
+        ):
+            payload = submit["payload"][: submit["len_cap"]]
+            events_per_dev[submit["devnum"]].append(
+                {"Id": event_id_for_hidraw_write(payload)}
+            )
+        elif (
+            b_request == HID_REQ_GET_REPORT
+            and is_in
+            and report_type == HID_REPORT_TYPE_INPUT
+        ):
+            events_per_dev[submit["devnum"]].append(
+                {
+                    "Id": event_id_for_hidraw_get_input(w_length),
+                    "DataOut": b64(response),
+                }
+            )
 
     return events_per_dev, descriptor_info
 
@@ -291,19 +330,56 @@ def build_phase_json(
 
 
 def build_device_object(devnum: int, busnum: int, descriptor: dict, events: list[dict]) -> dict:
-    """Construct a single UsbDevice JSON object suitable for fwupd's
-    fu_backend_add_json reader."""
+    """Construct a single FuHidrawDevice JSON object suitable for fwupd's
+    fu_backend_add_json reader. The plugin's FuDellMonitorRtDevice
+    inherits from FuHidrawDevice, which goes through /dev/hidraw via
+    fu_udev_device_write/read and HIDIOC* ioctls — different IO calls
+    than libusb's control_transfer, hence the FuHidrawDevice GType
+    rather than FuUsbDevice.
+
+    Three setup events are prepended to the per-device event stream:
+
+      * GetBackendParent:Subsystem=hid → fakes the udev parent walk
+        the plugin's probe() does to find the underlying HID class
+        node (so it can fish the VID/PID off it).
+      * ReadProp:Key=HID_ID → returns "0003:{VID:08X}:{PID:08X}",
+        the standard /sys/class/hidraw/hidrawN/device/uevent format.
+      * ReadProp:Key=HID_NAME → returns a stable display string.
+
+    BackendId is faked as a sysfs path. fwupd uses it as an identity
+    handle only; replay doesn't actually walk the path.
+    """
+    vid = descriptor.get("VendorId", 0)
+    pid = descriptor.get("ProductId", 0)
+    sysfs_path = (
+        f"/sys/devices/pci0000:00/0000:00:14.0/usb{busnum}/{busnum}-1/"
+        f"{busnum}-1:1.0/0003:{vid:04X}:{pid:04X}.{devnum:04X}"
+    )
+    sysfs_hidraw = f"{sysfs_path}/hidraw/hidraw{devnum}"
+    setup_events = [
+        {
+            "Id": "GetBackendParent:Subsystem=hid",
+            "GType": "FuUdevDevice",
+            "BackendId": sysfs_path,
+        },
+        {
+            "Id": "ReadProp:Key=HID_ID",
+            "Data": f"0003:{vid:08X}:{pid:08X}",
+        },
+        {
+            "Id": "ReadProp:Key=HID_NAME",
+            "Data": f"Realtek USB2.0 HID ({vid:04x}:{pid:04x})",
+        },
+    ]
     dev = {
-        "GType": "FuUsbDevice",
-        # Backend ID — fwupd uses platform-id strings here. For USB devices
-        # this is typically "BUS:DEV" or a sysfs path. Use BUS:DEV as a
-        # stable identifier; replay just needs it to be consistent.
-        "BackendId": f"{busnum}:{devnum}",
-        "PhysicalId": f"USB\\VID_{descriptor.get('VendorId', 0):04X}&PID_{descriptor.get('ProductId', 0):04X}",
+        "GType": "FuHidrawDevice",
+        "BackendId": sysfs_hidraw,
+        "Subsystem": "hidraw",
+        "DeviceFile": f"/dev/hidraw{devnum}",
         "Created": 0,
-        "VendorId": descriptor.get("VendorId", 0),
-        "ProductId": descriptor.get("ProductId", 0),
-        "Events": events,
+        "IdVendor": vid,
+        "IdProduct": pid,
+        "Events": setup_events + events,
     }
     return dev
 
