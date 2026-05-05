@@ -279,7 +279,7 @@ re-enumeration into bootloader mode):
 
 | Count   | First 4 bytes      | Probable role |
 |--------:|--------------------|--------------|
-| 87,352  | `c0 f3 00 00`      | Status poll (tight loop) |
+| 87,352  | `c0 f3 00 00`      | Status poll (tight loop) — see "0xC0 F3 status poll" below |
 |  4,077  | `40 c6 00 00`      | TBD — likely version/info or bootloader-enter |
 |  2,589  | `40 d6 60 00`      | `0xd6` subcommand family (probably erase-related) |
 |  1,840  | `40 d6 08 00`      | (same family) |
@@ -289,6 +289,52 @@ re-enumeration into bootloader mode):
 |     26 each × 16  | `40 f1 80 f0..ff` | **Flash write loop**, sweeping low addr byte |
 |     26  | `40 f5 94 01`      | TBD |
 |     26  | `40 f4 00 00`      | TBD |
+
+#### 0xC0 F3 status poll
+
+The tightest-loop traffic in the entire update — 87,352 polls in the
+captured pcap, ~2 ms between consecutive polls. Issued by the host
+between every byte-write to the bootloader-mode device. Decoded by
+pairing each request with its response across the entire pcap (script
+in commit history; one tshark pass + state-machine pairing).
+
+Wire format:
+
+```
+request   c0 f3 00 00 00 00 01 00 [184 bytes of zero]    SET_REPORT
+response  XX 00 00 00 00 00 00 00 [184 bytes of zero]    GET_REPORT
+```
+
+The request is fixed — the only variable is the response's first byte.
+All 192 trailing bytes of the response are always zero.
+
+Status byte values observed:
+
+| Byte 0 | Meaning             | Frequency           |
+|-------:|---------------------|---------------------|
+| `0xA0` | READY — proceed     | 88,787 / 88,813 (99.97%) |
+| `0x00` | BUSY — poll again   |     26 / 88,813 (0.03%) |
+
+Every BUSY response in the pcap fell at the same protocol point: the
+host had just sent the block-finalize sequence
+(`40 f1 80 …, 40 f1 00 …, 40 f1 80 …, 40 04 01 …, 40 f5 94 …`) which
+asks the chip to commit a 256-byte block. The chip needs a few extra
+milliseconds to compute its CRC and advance the bank pointer; for that
+brief window the next status poll returns `0x00`. As soon as the
+commit lands, status flips back to `0xA0` and the host writes the
+next block.
+
+Implementation note for the plugin: the simplest correct read is
+"poll until byte 0 != 0x00". Cadence in Dell's binary is ~2 ms; the
+chip never needed more than a handful of polls (max BUSY-streak in the
+pcap is 1 — i.e. each block-commit cleared on the next poll). A 1 ms
+poll-interval is plenty of headroom; 5 ms is also fine.
+
+There's no "error" status seen in this pcap — every operation
+succeeded. We don't yet know what an error response looks like (some
+other byte 0 value? A different second byte? A non-zero tail?), so
+the plugin should treat any unexpected non-`0x00`/`0xA0` value as a
+hard failure rather than assume more semantics.
 
 Sample real packet payloads (first 16 bytes, frame numbers from the
 captured pcap):
@@ -994,8 +1040,8 @@ plugin needs to handle a deliberate hub reset after the write phase
 - [ ] Walk the `Rts5409s_IIC_ISP::isp()` (a sibling of FL5500's) to
       see the *hub-MCU* update sequence. Almost certainly very similar
       register/write structure but acting on the RTS5409S's own flash.
-- [ ] Decode the `0xC0 F3` poll response to understand the success-
-      vs-busy bit pattern.
+- [x] Decode the `0xC0 F3` poll response to understand the success-
+      vs-busy bit pattern. **Done** — see "0xC0 F3 status poll" below.
 - [ ] Identify the bootloader-enter command (`04 08 02 00 01`) — it
       doesn't follow the `0x40` direction format and is sent to the
       transient address 17, suggesting an early-init code path
