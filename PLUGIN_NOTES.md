@@ -336,6 +336,72 @@ other byte 0 value? A different second byte? A non-zero tail?), so
 the plugin should treat any unexpected non-`0x00`/`0xA0` value as a
 hard failure rather than assume more semantics.
 
+#### 0x40 C8 — host-to-device firmware staging (pre-bootloader)
+
+The 1,536 c8 frames in the pre-bootloader phase aren't reads — they're
+**SET_REPORT writes** that load 8051 firmware into the hub MCUs ahead
+of the bootloader-entry trigger. The "1,536 = 3 passes × 256 addresses
+× 2 flag bits" count from the earlier table is structurally correct,
+but the operation is a firmware *load*, not a header *read*. The
+COMPLETE frame for each c8 SET_REPORT carries no payload — the device
+just acks.
+
+Wire layout per frame:
+
+```
+offset  0..7    8 bytes   header:  40 c8 <FLAG> <ADDR> 00 00 80 00
+offset  8..63   56 bytes  zero padding
+offset 64..191  128 bytes 8051 firmware code (the actual payload)
+```
+
+Header fields:
+
+| Field | Position | Meaning |
+|---|---|---|
+| `0x40`         | byte 0 | DIR_WRITE |
+| `0xc8`         | byte 1 | "load firmware chunk" opcode |
+| flag (`0x00` / `0x80`) | byte 2 | which half of the 256-byte block: `0x00` = low 128, `0x80` = high 128 |
+| addr (`0x00`-`0xff`)   | byte 3 | 256-byte block index — 256 blocks → **64 KB per pass** |
+| `0x80`         | byte 6 | payload length (= 128 bytes following at offset 64) |
+
+Reconstructed traffic in the recap pcap:
+
+| Device | c8 frames | Total bytes loaded | Pattern |
+|---|---:|---:|---|
+| dev 61 (DEV_1101 secondary HID, firmware mode) | 1,024 | 128 KB | 256 addr × 2 halves × **2 passes** |
+| dev 63 (DEV_1100 primary HID, firmware mode)   |   512 |  64 KB | 256 addr × 2 halves × **1 pass**  |
+| dev 71 (DEV_1100 primary, **bootloader mode**) |     0 | —      | none — c8 traffic is pre-bootloader only |
+
+Concatenating bytes 64..191 from successive c8 frames in (addr, flag)
+order produces a contiguous 8051 binary. Sample first 32 bytes of the
+dev 63 blob:
+
+```
+02 08 da 02 20 81 02 20 7a 22 ff 02 77 4c 02 20 7a ff ff 02 77 dd ff ff ff ff ff 02 99 21 f9 d1
+```
+
+Those leading `02 XX YY` triples are 8051 LJMP instructions — a
+classic interrupt vector table (reset vector → 0x08DA, then external
+INT0/timer/serial/etc handlers). This is unambiguously executable
+8051 firmware code, almost certainly the **ISP shim** the host loads
+into the hub MCU's RAM ahead of the bootloader-entry trigger so the
+post-trigger MCU has flash-write code to jump into.
+
+Plugin implications:
+
+1. The c8 staging phase **must run before the 0xE9 trigger** for the
+   captured-pcap protocol to work. Skipping it leaves the bootloader
+   with no ISP code to execute. (Unverified hypothesis — we haven't
+   yet tested whether the chip's own bootloader has resident
+   ISP code or strictly relies on the host-loaded version.)
+2. The data **isn't in the .upg** (wrong size, wrong content) and
+   **isn't in any extracted Dell binary at the raw-byte level** — a
+   text/binary grep across the entire `extracted/` tree finds zero
+   matches for the first 32 bytes. The data must be either runtime-
+   decrypted from one of the `.so` files, or constructed/compressed
+   in a form we haven't recognized yet. Sourcing this firmware is a
+   follow-up task; the c8 transport itself is now decoded.
+
 Sample real packet payloads (first 16 bytes, frame numbers from the
 captured pcap):
 
