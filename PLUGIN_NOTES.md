@@ -394,13 +394,24 @@ Plugin implications:
    with no ISP code to execute. (Unverified hypothesis — we haven't
    yet tested whether the chip's own bootloader has resident
    ISP code or strictly relies on the host-loaded version.)
-2. The data **isn't in the .upg** (wrong size, wrong content) and
-   **isn't in any extracted Dell binary at the raw-byte level** — a
-   text/binary grep across the entire `extracted/` tree finds zero
-   matches for the first 32 bytes. The data must be either runtime-
-   decrypted from one of the `.so` files, or constructed/compressed
-   in a form we haven't recognized yet. Sourcing this firmware is a
-   follow-up task; the c8 transport itself is now decoded.
+2. The data **is the .upg's `HUB` and `HUB4` components, decrypted**
+   — bytewise identical to what `fwupdtool firmware-extract` against
+   the .upg with our plugin emits. The initial raw-byte grep across
+   the on-disk `extracted/` tree found no match because the .upg
+   stores these components encrypted (per-component ECIES + passphrase
+   wrapping); the wire data is what falls out after decryption. Per-
+   device mapping confirmed against the recap pcap:
+
+   | Component | Size  | Loaded into                          | c8 frames                |
+   |-----------|------:|--------------------------------------|--------------------------|
+   | `HUB`     |  64 KB | DEV_1100 primary HID firmware-mode  | 512  (1 pass × 256 × 2) |
+   | `HUB4`    | 128 KB | DEV_1101 secondary HID firmware-mode| 1024 (2 passes × 256 × 2) |
+
+   The mapping is "which decrypted .upg component is the ISP shim for
+   each MCU." `HUB` is the RTS5409S primary (DEV_1100); `HUB4` is the
+   secondary (DEV_1101). The other components (`HUB1`, `HUB2`, `PDC`,
+   `753.0AK01.0007`) are presumably loaded post-bootloader-entry via
+   the bootloader-mode flash path (not via c8 staging).
 
 Sample real packet payloads (first 16 bytes, frame numbers from the
 captured pcap):
