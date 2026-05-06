@@ -399,19 +399,61 @@ Plugin implications:
    the .upg with our plugin emits. The initial raw-byte grep across
    the on-disk `extracted/` tree found no match because the .upg
    stores these components encrypted (per-component ECIES + passphrase
-   wrapping); the wire data is what falls out after decryption. Per-
-   device mapping confirmed against the recap pcap:
+   wrapping); the wire data is what falls out after decryption.
 
-   | Component | Size  | Loaded into                          | c8 frames                |
-   |-----------|------:|--------------------------------------|--------------------------|
-   | `HUB`     |  64 KB | DEV_1100 primary HID firmware-mode  | 512  (1 pass × 256 × 2) |
-   | `HUB4`    | 128 KB | DEV_1101 secondary HID firmware-mode| 1024 (2 passes × 256 × 2) |
+   **Updated mapping (2026-05-05) — all four pre-bootloader blobs are
+   ephemeral RAM-staged ISP shims, one per MCU.** The 9,717-event
+   "skip" on HID-A pre-bootloader (between version probe and the first
+   c8 frame on the next device incarnation) turns out to stage two
+   *additional* ISP shims onto downstream MCUs over the i2c tunnel —
+   bytewise sha256-equal to the decrypted `HUB1` and `HUB2` components.
+   Verified against `id-HUB1.fw` / `id-HUB2.fw` from
+   `fwupdtool firmware-extract`:
 
-   The mapping is "which decrypted .upg component is the ISP shim for
-   each MCU." `HUB` is the RTS5409S primary (DEV_1100); `HUB4` is the
-   secondary (DEV_1101). The other components (`HUB1`, `HUB2`, `PDC`,
-   `753.0AK01.0007`) are presumably loaded post-bootloader-entry via
-   the bootloader-mode flash path (not via c8 staging).
+   | Component | Size   | Target              | Wire path                                 | Frame count                       |
+   |-----------|-------:|---------------------|-------------------------------------------|-----------------------------------|
+   | `HUB1`    | 128 KB | i2c slave `0xD4`    | HID-A, opcode `0xC6` (i2c tunnel WRITE)  | 2048 frames × 64 B 8051 chunks    |
+   | `HUB2`    |  64 KB | i2c slave `0xD6`    | HID-A, opcode `0xC6` (i2c tunnel WRITE)  | 1024 frames × 64 B 8051 chunks    |
+   | `HUB`     |  64 KB | DEV_1100 (primary)  | HID-A, opcode `0xC8` (RAM stage)         | 512  (1 pass × 256 × 2)           |
+   | `HUB4`    | 128 KB | DEV_1101 (secondary)| HID-B, opcode `0xC8` (RAM stage)         | 1024 (2 passes × 256 × 2)         |
+
+   The 0xC6 frames carry a fixed `13 40` i2c sub-command header at
+   payload offset 64, followed by 64 bytes of 8051 firmware per frame.
+   Each cycle of writes is gated by a fresh cal_auth handshake
+   (`40 e1 01 01` → GET_REPORT challenge → `40 e1 03 00` response),
+   then `40 06 00` (disable high clock), `40 02 01 00 da 0b` (re-enable
+   vdcmd), `40 06 01` (re-enable high clock). The captured trace runs
+   that refresh **56 times** across the bulk transfer.
+
+   **Why we believe all four are ephemeral, not flash:**
+   - All four blobs are exact powers of two (64 KB / 128 KB) with **no
+     trailing bytes for an in-band signature**. If any of them were
+     being persisted to flash, you'd expect either a sig trailer or an
+     explicit verify opcode, neither of which is on the wire.
+   - The protocol shape is symmetric **stage → stage → stage → stage →
+     trigger**: four loads of executable 8051 code into four MCUs'
+     RAM, then a single `0xE9` to the USB-connected primary chip.
+     The primary's now-running ISP shim then orchestrates the
+     downstream MCUs whose ephemeral payloads are already sitting in
+     their RAM, ready to run.
+   - `cal_auth` is host→chip authentication (cal_auth's response
+     depends only on the chip's challenge nonce and a static 8-byte
+     key, never on firmware bytes — see "cal_auth decoded" above), not
+     a firmware-integrity check. The chips' acceptance gate is "did
+     you pass cal_auth?" and nothing more.
+
+   **Integrity model:** the entire chain of trust is anchored
+   *host-side*, in Dell's binary verifying the .upg's per-component
+   ECDSA trailer with the embedded Wistron pubkey before any wire
+   activity. We replicated that check in tasks #24/#25. The chips
+   themselves trust whatever is staged via cal_auth-gated transport.
+   The persistent flash writes happen *post*-bootloader via `0x40 F1`
+   (see below), driven by the now-running ISP shims rather than by
+   the host directly.
+
+   The remaining components (`PDC`, `753.0AK01.0007`) are presumed to
+   be the actual persistent firmware payloads streamed through the
+   running ISPs in the post-bootloader bulk phase.
 
 Sample real packet payloads (first 16 bytes, frame numbers from the
 captured pcap):
@@ -1667,6 +1709,203 @@ future bundle ships with a different key, swap the constant.
       `dell-dock` makes this a relatively short conversation.
 - [ ] Decide whether to upstream into `fwupd` proper or keep as an
       out-of-tree plugin distributed separately.
+
+---
+
+## Version semantics + panel binding (decoded 2026-05-06)
+
+There are **three distinct kinds of "version"** in this protocol, and
+conflating them will produce subtly wrong skip-or-update decisions.
+Spelling each out before any verify-before-flash code lands.
+
+### 1. Chip persistent firmware version (`opcode 0x09`, "get_fw_version")
+
+`R 0xC0 0x09` reads back a struct from each USB-connected hub MCU. The
+relevant fields:
+
+```
+offset 0..1   00 0b           reserved
+offset 2..3   da 04           RealTek vendor sig
+offset 4..6   83 54 83        chip-class header (constant)
+offset 7      81 / 82         chip-class id (0x81 primary, 0x82 secondary)
+offset 8..10  81 ff 02        constant
+offset 11..13 03 04 02        firmware version triplet (major.minor.patch)
+offset 14..16 03 40 03        constant
+…             zeros / padding
+```
+
+Captured values for this monitor pre-update:
+- Primary (DEV_1100, RTS5409s): chip-class `0x81`, fw `3.4.2`
+- Secondary (DEV_1101, RTS5418E): chip-class `0x82`, fw `4.6.2`
+
+Dell's binary calls `0x09` exactly twice per chip — once before the
+install for diagnostics, once after to confirm the new fw landed. It
+does **not** drive the skip-or-update decision.
+
+### 2. Package state register (DDC/CI VCP `0xAD`, the "IspTag")
+
+`51 84 c0 99 ad 18 57` to slave `0x6E` triggers a read of the chip's
+**state register**, not its firmware version. The reply embeds the
+last-installed package version as ASCII between `#` delimiters with a
+state prefix:
+
+- `ISP#M3T105#` while an install is mid-flight (Dell writes this
+  *into* the chip via the same `0xAD` selector before the install
+  begins, recording "package M3T105 is currently installing")
+- `CHK#M3T105#` after the post-install reload completes (Dell writes
+  this on success — "package M3T105 is verified, install committed")
+
+Dell's binary calls this the **`IspTag`** command; the decomp shows
+`#ISP#…#` literal-string concatenation in `firmware-updater.c` near a
+config flag named `postpone_isptag_command`. Another flag,
+`skip_version_check`, can disable the skip-or-update decision —
+confirming this *is* the read that drives it.
+
+This is what the plugin reads as the device's user-facing version. We
+were already reading it (after the 2026-05-06 fix that switched from
+selector `0xCC` to `0xAD`), but we hadn't grasped that we're reading a
+*state register* — the chip records which package was last installed,
+and the state prefix tells us whether the last-recorded install
+completed cleanly. The right verify-before-flash check is: read the
+`IspTag`'s `<version>` field, compare to the .upg's package version
+(`fw_version` in the header — `M3T105` for our test bundle), and skip
+the install if they match.
+
+### 3. Per-component metadata `version` field (in the .upg)
+
+Each component's encrypted metadata carries a `version` string:
+
+| Component | metadata version | Meaning |
+|-----------|------------------|---------|
+| `753.0AK01.0007` | `M3T105` | persistent scaler firmware target |
+| `DISPLAY` | `M3T105` | persistent display payload target |
+| `HUB` | `3.03` | ephemeral ISP shim version (NOT chip's runtime fw) |
+| `HUB1` | `1.04` | ephemeral i2c-loaded ISP shim version |
+| `HUB2` | `2.04` | ephemeral i2c-loaded ISP shim version |
+| `HUB4` | `4.05` | ephemeral ISP shim version (NOT chip's runtime fw) |
+| `PDC` | `f807.12.e9.…` | persistent PDC firmware target |
+
+The numeric mismatch with the chip's `0x09` runtime fw triplet
+(`HUB=3.03` metadata vs `3.4.2` chip; `HUB4=4.05` vs `4.6.2`) is not a
+bug — it's a category error. The metadata version on **ephemeral
+components** describes the ISP shim binary's own version, not the
+chip's persistent firmware version. Comparing them directly is
+meaningless.
+
+For **persistent components** (`753.0AK01.0007`, `DISPLAY`, `PDC`), the
+metadata version *is* the target firmware version. Useful for
+diagnostics, but the package-level skip-or-update decision is already
+covered by the `IspTag` read above.
+
+### Other DDC/CI VCP selectors Dell sends
+
+Decoded from request/response pairing in the captured trace; all read
+scaler-stored metadata, all informational:
+
+| Selector | Returns | What it is |
+|----------|---------|------------|
+| `c0 99 cc 20` | `M3T105` | package version (short form, no state prefix) |
+| `c0 99 ad 18` | `#ISP#M3T105#` / `#CHK#M3T105#` | package version + install-state prefix (the `IspTag` register) |
+| `c0 99 ee 20` | `753.0AK01.0007` | scaler firmware ID — **this is also the panel ID** (see below) |
+| `c0 99 aa 14` | `VN0VV8X4WS700617297L` | Dell service tag |
+| `c0 99 ab 20` | `B7LM884` | asset/SKU id |
+| `c0 99 dd 20` | `U4025QW` | product model |
+| `c0 01 e6 00` | `01 43` (2 bytes) | status byte |
+| `01 fe 03 00` | `02 00 fe 00 ff ff …` (binary) | panel/EDID descriptor (used for the slave-`0x42` EDID read path) |
+
+The `cc 20` and `ad 18` selectors return the same M3T105 string; `ad 18`
+just wraps it with the install-state prefix. We use `ad 18` so we can
+read the prefix and distinguish "install in progress" (`ISP#`) from
+"committed" (`CHK#`) — the latter is what `read_scaler_version` should
+expect on a clean monitor, the former indicates a mid-install state
+that needs handling (probably "let the chip finish, then redo the
+verify").
+
+### Panel binding — how the .upg encodes it and how Dell looks it up
+
+The .upg header carries two parallel string lists:
+
+```
+name_table   = ["HUB1", "HUB2", "HUB4", "HUB", "PDC", "DISPLAY"]
+panel_bound  = ["DISPLAY"]
+```
+
+`name_table` declares all the component types in the bundle; the
+component section then carries `name_table.size + panel_bound.size`
+entries. The first 6 are keyed by the plaintext name from
+`name_table` and apply universally. The 7th is keyed by the
+**plaintext panel ID** the .upg targets — for our M3T105 bundle that
+key is `753.0AK01.0007`, and the entry's metadata sets
+`panel_bound: true, panel_id: 753.0AK01.0007`. The presence of
+`"DISPLAY"` in `panel_bound` says "the DISPLAY component type is
+panel-bound; pick the entry whose key matches the connected panel's
+id."
+
+So a panel-binding check is:
+
+1. Read the panel id from the chip — the value the **scaler returns
+   via VCP `0xEE 20 2c`** (the same `753.0AK01.0007` we've been
+   labeling as "scaler firmware ID"). The scaler's firmware ID *is*
+   the panel id from this protocol's perspective: each panel SKU
+   gets its own scaler firmware build, so the firmware ID uniquely
+   names the panel.
+2. Look up that string in the .upg's panel-bound component keys.
+3. If a match exists → use that entry's payload as the DISPLAY
+   firmware for this install. If no match → refuse the install
+   (the connected panel is not one this .upg supports).
+
+This is much simpler than the slave-`0x42` panel-bus reads suggest.
+Those reads (`08 04 46 4c {72,61,77} 64` to slave `0x42` —
+`FLrd`/`FLad`/`FLwd`) are a separate panel-side i2c protocol that
+appears to read panel registers directly (capabilities, mode, …) for
+informational purposes, not for binding identification. Empirically
+verified: pairing each `c6`→`0x42` write with its `d6`+ioctl response
+across the captured trace shows every reply is `04 00 00 …` (a 1-byte
+ack followed by zeros). The actual panel data, if any, would come
+through a separate read path (the longer `09 20 …` variants) — but
+none of those replies carry the `753.0AK01.0007` panel id we'd need
+for binding. The binding check uses VCP `0xEE` only.
+
+**Implications for the plugin's verify-before-flash:**
+
+- `read_panel_id(self)` — issue VCP `0xEE 20 2c`, parse the ASCII
+  reply. Returns the panel id string.
+- `read_isptag(self)` — what `read_scaler_version` already does; rename
+  to be honest about the semantics.
+- Pre-flash verify pass:
+    1. Read `IspTag` → check state prefix (`ISP#` = mid-install; for
+       now, refuse to proceed until we understand resume; `CHK#` =
+       clean, allow the version compare).
+    2. If `IspTag` version == .upg `fw_version` → already at target,
+       return success without IO.
+    3. Read panel id via VCP `0xEE`.
+    4. For each component with `panel_bound: true`, check that the
+       component's `panel_id` equals the read value. (In practice
+       there is at most one such component per category — the .upg
+       only contains the panel-bound entries the bundle targets, so
+       a non-match means this monitor isn't supported by this .upg.)
+    5. If panel mismatch → fail before any IO with a clear "this .upg
+       targets panel X, monitor reports panel Y" error.
+
+### How Dell's binary does this (from the decomp)
+
+The relevant code in `firmware-updater.c`:
+
+- `firmware-updater.c:360764` — concatenates `"#ISP#"` + version
+  string and sends it as the `IspTag` command (writing the state).
+- `firmware-updater.c:123214` — checks the `skip_version_check`
+  config flag; the version comparison happens in the surrounding
+  function and is gated by this flag.
+- `firmware-updater.c:123249` — `postpone_isptag_command` flag
+  controls whether the IspTag write happens up-front or deferred.
+
+The chip-side handler is in `libdevices.so` —
+`RTS5409S_HID::update_hub_info(PROG_CFG)` is the wrapper that
+implements `IspTag` write + read. The `PROG_CFG` struct holds the
+package's identification fields (decoded earlier in this doc). Worth
+a deeper Ghidra pass once we wire up the verify-before-flash code,
+but the wire format is what we've already decoded — the decomp is
+just confirmation.
 
 ---
 
