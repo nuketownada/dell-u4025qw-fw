@@ -1744,32 +1744,108 @@ does **not** drive the skip-or-update decision.
 
 ### 2. Package state register (DDC/CI VCP `0xAD`, the "IspTag")
 
-`51 84 c0 99 ad 18 57` to slave `0x6E` triggers a read of the chip's
-**state register**, not its firmware version. The reply embeds the
-last-installed package version as ASCII between `#` delimiters with a
-state prefix:
+`51 84 c0 99 ad 18 57` to slave `0x6E` reads the chip's **`IspTag`**
+register. The reply embeds the installed-package version between '#'
+delimiters with a 3-letter state prefix:
 
-- `ISP#M3T105#` while an install is mid-flight (Dell writes this
-  *into* the chip via the same `0xAD` selector before the install
-  begins, recording "package M3T105 is currently installing")
-- `CHK#M3T105#` after the post-install reload completes (Dell writes
-  this on success — "package M3T105 is verified, install committed")
+- `#ISP#M3T105#`
+- `#CHK#M3T105#`
 
-Dell's binary calls this the **`IspTag`** command; the decomp shows
-`#ISP#…#` literal-string concatenation in `firmware-updater.c` near a
-config flag named `postpone_isptag_command`. Another flag,
-`skip_version_check`, can disable the skip-or-update decision —
-confirming this *is* the read that drives it.
+**Read wire format** (DDC/CI selector `0xAD`, sub `0x18`):
 
-This is what the plugin reads as the device's user-facing version. We
-were already reading it (after the 2026-05-06 fix that switched from
-selector `0xCC` to `0xAD`), but we hadn't grasped that we're reading a
-*state register* — the chip records which package was last installed,
-and the state prefix tells us whether the last-recorded install
-completed cleanly. The right verify-before-flash check is: read the
-`IspTag`'s `<version>` field, compare to the .upg's package version
-(`fw_version` in the header — `M3T105` for our test bundle), and skip
-the install if they match.
+```
+host → 6e:  51 84 c0 99 ad 18 57           (length=4, vendor sig 0x99, sel 0xAD)
+6e → host:  51 9a c1 99 23 49 53 50 23 …   (#ISP#M3T105#…)
+                       ↑     ↑           ↑
+                       '#'   ISP        '#' (separators)
+```
+
+**Write wire format** (same selector, different sub-opcode `0x55`):
+
+```
+host → 6e:  51 99 c0 55 ad 23 49 53 50 23 4d 33 54 31 30 35 23 00…00 e9
+                       ↑   '#  I  S  P  #  M  3  T  1  0  5  #'  (zero pad) csum
+                       sub-op `0x55` = WRITE
+```
+
+**Decomp evidence (Dell `Firmware Updater` binary):**
+
+- `FUN_00317400` builds `"#ISP#" + version + "#"` and writes it via
+  vtable offset `0x1a0` with key `"IspTag"`. Called near install
+  start (line 346807, line 353258).
+- `FUN_00317d00` is bigger: does a buffer send via vtable offset
+  `0x20`, then *conditionally* (gated on
+  `*(param_1+0x1b0) == 0` AND the `0x20` method returning 0) builds
+  `"#CHK#" + version + "#"` and writes it via the same
+  `"IspTag"` key. Called from line 349304. This is the post-verify
+  commit — and it has visible code paths where CHK doesn't fire (failed
+  verify, flag set).
+- `postpone_isptag_command` config flag (line 123249) controls
+  whether the IspTag write happens up-front or deferred.
+- `skip_version_check` config flag (line 123214) can disable the
+  skip-or-update decision the read drives.
+
+**Empirical observation in our captured trace (clean install,
+captured from start):**
+
+| ev    | direction | content                                        |
+|-------|-----------|------------------------------------------------|
+| 206   | read      | response: `#ISP#M3T105#`                       |
+| 218   | read      | response: `#ISP#M3T105#`                       |
+| 230   | write     | `#ISP#M3T105#` (Dell stamps install start)     |
+| 242   | write     | `#ISP#M3T105#` (Dell repeats — extra delay)    |
+| 21331 | write     | `#CHK#M3T105#` (Dell commits post-verify)      |
+
+**Live readback after the install completed** (using the standalone
+`read_isptag.py` tool against the real monitor, post-reboot, no Dell
+software running):
+
+```
+IspTag wire: 51 9a c1 99 23 43 48 4b 23 4d 33 54 31 30 35 23 …
+IspTag ascii: Q...#CHK#M3T105#…
+```
+
+So **CHK persists across power cycles**, confirming the original
+semantics: `#ISP#…` is "install marked but not yet committed";
+`#CHK#…` is "post-verify committed"; both are persistent. The chip
+was at `#ISP#…` at the start of our pcap because *some prior install
+on this monitor hit one of the gating conditions in `FUN_00317d00`*
+(verify failure, or the `0x1b0` flag set) and never reached its CHK
+write. After our captured install completed Dell's verify path
+correctly, the CHK write landed and survives reboots.
+
+**Does Dell branch on the prefix?** Walked all 7 `"IspTag"`
+references in `firmware-updater.c`:
+
+| line  | function          | role                                                |
+|-------|-------------------|-----------------------------------------------------|
+| 82447 | FUN_00195980      | builds an `IspTag`/`DISPLAY` tag pair for a label   |
+| 346767, 346785 | FUN_002fb1c0 | diagnostic read-sleep-read pattern (extra_delay-gated)  |
+| 360789 | FUN_00317400      | **writes `#ISP#…` at install start** (unconditional)|
+| 361533 | FUN_00317d00      | **writes `#CHK#…` at install end** (verify-gated)   |
+| 362745 | info-pass         | reads IspTag alongside ServiceTag etc.; only ServiceTag is compared |
+| 363134 | FUN_0031afc0      | appends "IspTag" to a fields-to-read list           |
+| 364802 | FUN_0031f4b0 PreCheck | conditionally reads IspTag (gated on `postpone_isptag_command`) for part-number lookup |
+
+**Dell's binary never branches on the `ISP#` vs `CHK#` prefix.** It
+reads the value, logs it (`"IspTag = #ISP#M3T105#"`), and proceeds
+with the install regardless. The skip-or-update decision is gated on
+`skip_version_check` against the version field — not the prefix.
+
+There's a config flag named `ignore_incomplete_warning_message` that
+*suggests* an "incomplete" warning exists somewhere, but the
+corresponding warning-emit site isn't in the code paths we've
+decoded. Could be model-specific (the `[P5525QC] Ignore UPDATE_ERROR`
+string nearby suggests model-keyed messages), GUI-rendered via
+Sciter, or future/dead code.
+
+**For the plugin's verify-before-flash:**
+
+- Read the `IspTag` version field. If it equals the .upg's
+  `fw_version`, skip the install (chip is already at target).
+- Surface the prefix in diagnostics for humans, but don't gate plugin
+  behavior on it — Dell doesn't, and our pcap evidence shows the
+  chip flashes successfully starting from either state.
 
 ### 3. Per-component metadata `version` field (in the .upg)
 
@@ -1805,7 +1881,7 @@ scaler-stored metadata, all informational:
 | Selector | Returns | What it is |
 |----------|---------|------------|
 | `c0 99 cc 20` | `M3T105` | package version (short form, no state prefix) |
-| `c0 99 ad 18` | `#ISP#M3T105#` / `#CHK#M3T105#` | package version + install-state prefix (the `IspTag` register) |
+| `c0 99 ad 18` | `#ISP#M3T105#` (or `#CHK#…#`) | package version + state prefix (`IspTag`); prefix semantics not yet decoded |
 | `c0 99 ee 20` | `753.0AK01.0007` | scaler firmware ID — **this is also the panel ID** (see below) |
 | `c0 99 aa 14` | `VN0VV8X4WS700617297L` | Dell service tag |
 | `c0 99 ab 20` | `B7LM884` | asset/SKU id |
@@ -1814,12 +1890,9 @@ scaler-stored metadata, all informational:
 | `01 fe 03 00` | `02 00 fe 00 ff ff …` (binary) | panel/EDID descriptor (used for the slave-`0x42` EDID read path) |
 
 The `cc 20` and `ad 18` selectors return the same M3T105 string; `ad 18`
-just wraps it with the install-state prefix. We use `ad 18` so we can
-read the prefix and distinguish "install in progress" (`ISP#`) from
-"committed" (`CHK#`) — the latter is what `read_scaler_version` should
-expect on a clean monitor, the former indicates a mid-install state
-that needs handling (probably "let the chip finish, then redo the
-verify").
+just wraps it with the prefix. We use `ad 18` so the prefix is
+captured for diagnostics — the version field is what we actually
+consume.
 
 ### Panel binding — how the .upg encodes it and how Dell looks it up
 
@@ -1870,12 +1943,12 @@ for binding. The binding check uses VCP `0xEE` only.
 
 - `read_panel_id(self)` — issue VCP `0xEE 20 2c`, parse the ASCII
   reply. Returns the panel id string.
-- `read_isptag(self)` — what `read_scaler_version` already does; rename
-  to be honest about the semantics.
+- `read_isptag(self)` — issue VCP `0xAD 18 57`, parse `{state_prefix,
+  version}`. Renamed from `read_scaler_version` to be honest about
+  the semantics.
 - Pre-flash verify pass:
-    1. Read `IspTag` → check state prefix (`ISP#` = mid-install; for
-       now, refuse to proceed until we understand resume; `CHK#` =
-       clean, allow the version compare).
+    1. Read `IspTag`. Log the prefix for diagnostics. **Don't** gate
+       on it — we don't know what `ISP#` vs `CHK#` means yet.
     2. If `IspTag` version == .upg `fw_version` → already at target,
        return success without IO.
     3. Read panel id via VCP `0xEE`.
