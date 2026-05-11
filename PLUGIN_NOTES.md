@@ -2133,6 +2133,112 @@ Phase A is unblocking — getting the emulator cursor past the gap
 between bootloader-entry and the first F1 lets us then verify F4/F5
 decoding sits where we expect it to.
 
+## Phase A — PDC firmware programming (decoded 2026-05-10)
+
+The first 12K events post-bootloader-entry program the **TPS6598x USB-PD
+controller** (Dell's "PDC" component) via i2c-tunnel slave `0x42`.
+Confirmed via `libpdc.so` (which is `not stripped`, with full
+`Tps6598xISP::*` symbols). The `i2c_or_index=0x21` field in the .upg's
+PDC metadata is the 7-bit form of slave 0x42.
+
+### TPS6598x flash 4CC command set (from libpdc.so + TI ref doc SLVUBH2B)
+
+| 4CC  | Op    | Wire bytes (LE) | Role                                |
+|------|-------|-----------------|-------------------------------------|
+| FLrr | read  | `46 4c 72 72`   | Set Flash Read Region (load region pointer) |
+| FLer | write | `46 4c 65 72`   | Erase Region Pointer                |
+| FLrd | read  | `46 4c 72 64`   | Flash Memory Read                   |
+| FLad | write | `46 4c 61 64`   | Set Flash Memory Write Start Address |
+| FLwd | write | `46 4c 77 64`   | Flash Memory Write (32 B per call)  |
+| FLem | write | `46 4c 65 6d`   | Flash Memory Erase                  |
+| FLvy | write | `46 4c 76 79`   | Flash Memory Verify                 |
+| FLrr | also returns the region's current pointer in the response |
+
+Wire encoding for issuing a 4CC command:
+
+```
+host → 0x42:  c6 09 LL <buffer bytes...>      (set 4CC input data buffer)
+host → 0x42:  c6 08 04 46 4c <c1> <c2>        (issue command "FL<c1c2>")
+host → 0x42:  d6 count=5                      (read 1-byte ack header)
+host → 0x42:  d6 count=N                      (read N-byte response, optional)
+```
+
+### Phase A sequence for Region 0 (decoded from RegionUpdate82)
+
+```
+FLrr(R0)               → returns current Region 0 pointer (0x0800)
+FLem(target_address)   → erase the flash region
+loop count = total_size / chunk_size:
+    FLad(addr)         ; addr = base + chunk_size + i*chunk_size
+    FLwd(buffer[uVar8 .. uVar8+chunk_size])
+    (verify with VerifyFW)
+FLad(base)             ; header-last write at the lowest address
+FLwd(buffer[0..chunk_size])
+FLrr(R0) again
+FLvy(target_address)   → verify the entire region
+```
+
+For our PDC payload: `chunk_size=32`, `total_size=14624`, `base=0x800`,
+loop runs 456 times (writing addresses 0x820..0x4100). Then header
+write puts PDC.fw[0:32] at 0x800. So 457 total FLwd's, matching the
+captured trace exactly.
+
+### `cal_checksum` is sum-of-bytes mod 65536
+
+`Tps6598xISP::cal_checksum(buf, off, len)` is decoded as a horizontal
+SSE byte-sum reduction → 16-bit return. Verified: `sum16(PDC.fw)` =
+`0xBA77`, matching the per-component `crc16` field in the .upg
+metadata. (The metadata field name is misleading — it's a sum, not a
+CRC.)
+
+`load()` also computes `sum16` of the loaded buffer and stores it at
+`this+0x84` for later verification.
+
+### Open mystery: the 32-byte trailer at flash 0x4100
+
+The captured trace shows Dell's loop reading a 14624-byte buffer (32
+bytes more than the extracted PDC.fw). The extra 32 bytes (with 9
+meaningful bytes `5719621ae339a66f75` followed by 23 zeros) get
+written at flash 0x4100 — exactly one chunk past the end of PDC.fw.
+
+These 9 bytes are NOT:
+- In the .upg file (encrypted or decrypted)
+- In any extracted .upg blob (HUB1/HUB2/HUB4/HUB/PDC/DISPLAY)
+- In the full ECIES plaintext for PDC (14814 bytes including 222-byte
+  ECDSA trailer — checked all offsets)
+- In `libpdc.so` / `libhub.so` / `libdevices.so` / `Firmware Updater`
+  as a static constant
+- A recognizable hash (SHA-1/256/512, MD5, HMAC) of PDC.fw or
+  obvious inputs (product name, version, etc.)
+- A simple CRC of any obvious sub-region of PDC.fw
+
+Best guess: Dell's host code allocates a 14624-byte buffer at runtime
+and computes the trailer from chip-specific state (read via FLrr
+response, register reads, or some side channel we haven't traced).
+Finding the algorithm would require one of:
+
+1. Deeper Ghidra trace through `RegionUpdate82` callers or the
+   buffer-allocation path (likely in `firmware-updater.c`'s
+   chip-class dispatch code).
+2. Live trace with strace/ltrace on Dell's `Firmware Updater` to
+   capture what it computes.
+3. A second pcap with deliberately-different chip state to see if the
+   marker bytes change (would prove they're chip-derived).
+
+**Pragmatic implementation path**: read-modify-write the trailer.
+The plugin can:
+
+1. After writing PDC.fw[32:14592] in chunks (skipping address 0x800),
+2. Read flash 0x4100..0x411F via FLad+FLrd → cache the existing 32 bytes,
+3. Write those bytes back at 0x4100 unchanged (no-op for the chip's
+   verification, since whatever marker the previous install left is
+   still valid),
+4. Write PDC.fw[0:32] at 0x800 (header-last commit),
+5. FLvy to verify.
+
+This sidesteps the algorithm question entirely and is safe because
+it preserves the chip's existing trailer state.
+
 ## Plugin status — what works today
 
 Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monitor-rt/`.
