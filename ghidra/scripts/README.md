@@ -36,6 +36,26 @@ and binary. The decompile outputs live in `../decomp/*.c` and ARE
 checked in (text-compressible, expensive to regenerate, valuable as
 documentation).
 
+### Python alternative (DumpDecompiled.py)
+
+`DumpDecompiled.py` is a Jython equivalent of the Java script. Use
+it when Ghidra fails to load the Java script (a known issue on some
+Ghidra 11.x versions: `Failed to find source bundle containing
+script`). Output filename comes from the `DUMP_OUT` env var instead
+of `-postScript` args:
+
+```sh
+DUMP_OUT="../decomp/$OUT" $GHIDRA \
+  /tmp/ghidra-libpdc tmp_pdc \
+  -import "../../extracted/usr/share/Dell/firmware/U4025QW/$TARGET" \
+  -scriptPath . \
+  -postScript DumpDecompiled.py \
+  -overwrite
+```
+
+The output uses the same `// ===== <name> @ <addr> =====` markers as
+the Java version, so `find-fn.sh` works against either.
+
 ## Probing decryption schemes for appconfig.dat
 
 ```sh
