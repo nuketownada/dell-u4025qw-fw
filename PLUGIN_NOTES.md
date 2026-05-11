@@ -2194,50 +2194,89 @@ CRC.)
 `load()` also computes `sum16` of the loaded buffer and stores it at
 `this+0x84` for later verification.
 
-### Open mystery: the 32-byte trailer at flash 0x4100
+### Solved: the 32-byte "trailer" at flash 0x4100 is heap garbage from a Wistron off-by-one bug
 
-The captured trace shows Dell's loop reading a 14624-byte buffer (32
-bytes more than the extracted PDC.fw). The extra 32 bytes (with 9
-meaningful bytes `5719621ae339a66f75` followed by 23 zeros) get
-written at flash 0x4100 — exactly one chunk past the end of PDC.fw.
+The captured trace shows Dell writing 32 bytes (with the
+`5719621ae339a66f75 + 23 zeros` marker) at flash 0x4100, exactly one
+chunk past the end of the actual PDC.fw region. After extensive
+hunting (the bytes don't appear in the .upg, the full 14814-byte
+ECIES plaintext, any binary as a constant, or as any recognizable
+hash/HMAC of PDC.fw), disassembly of `Tps6598xISP::RegionUpdate82`
+reveals the actual cause: **Wistron's loop has an off-by-one read
+past the vector's allocated bytes**.
 
-These 9 bytes are NOT:
-- In the .upg file (encrypted or decrypted)
-- In any extracted .upg blob (HUB1/HUB2/HUB4/HUB/PDC/DISPLAY)
-- In the full ECIES plaintext for PDC (14814 bytes including 222-byte
-  ECDSA trailer — checked all offsets)
-- In `libpdc.so` / `libhub.so` / `libdevices.so` / `Firmware Updater`
-  as a static constant
-- A recognizable hash (SHA-1/256/512, MD5, HMAC) of PDC.fw or
-  obvious inputs (product name, version, etc.)
-- A simple CRC of any obvious sub-region of PDC.fw
+The asm at libpdc.so 0x986c8-0x986d8 in `Tps6598xISP::load`:
 
-Best guess: Dell's host code allocates a 14624-byte buffer at runtime
-and computes the trailer from chip-specific state (read via FLrr
-response, register reads, or some side channel we haven't traced).
-Finding the algorithm would require one of:
+```asm
+986c8: mov rdx, [rdi+0x40]   ; rdx = vector END pointer
+986d1: sub rdx, r12          ; rdx = end - data = SIZE
+986d4: mov [rbx+0x78], r12   ; this+0x78 = data ptr
+986d8: mov [rbx+0x80], edx   ; this+0x80 = vector SIZE
+```
 
-1. Deeper Ghidra trace through `RegionUpdate82` callers or the
-   buffer-allocation path (likely in `firmware-updater.c`'s
-   chip-class dispatch code).
-2. Live trace with strace/ltrace on Dell's `Firmware Updater` to
-   capture what it computes.
-3. A second pcap with deliberately-different chip state to see if the
-   marker bytes change (would prove they're chip-derived).
+So `this+0x80` is exactly the source vector's size. The metadata's
+`crc16=BA77` field equals `sum16(PDC.fw, 14592)` exactly — verified
+empirically — so the source vector is **14592 bytes** (the metadata
+declares `<data size="0x3900">`, matching).
 
-**Pragmatic implementation path**: read-modify-write the trailer.
-The plugin can:
+The write loop in `RegionUpdate82` (libpdc.so 0x9a155-0x9a22f) does:
 
-1. After writing PDC.fw[32:14592] in chunks (skipping address 0x800),
-2. Read flash 0x4100..0x411F via FLad+FLrd → cache the existing 32 bytes,
-3. Write those bytes back at 0x4100 unchanged (no-op for the chip's
-   verification, since whatever marker the previous install left is
-   still valid),
-4. Write PDC.fw[0:32] at 0x800 (header-last commit),
-5. FLvy to verify.
+```c
+chunk_size = 32           // this[9]
+total_size = 14592        // this[0x80] = vector size
+uVar8 = chunk_size        // start at 32, not 0
+count = 0
+do {
+    addr = base + uVar8                       // first iter: 0x800+32 = 0x820
+    FLad(addr)
+    memmove(i2cFlashData, buffer + uVar8, chunk_size)  // copy chunk_size bytes
+    FLwd(i2cFlashData)
+    uVar8 += chunk_size
+    count++
+} while (count < total_size / chunk_size)     // limit = 456
+```
 
-This sidesteps the algorithm question entirely and is safe because
-it preserves the chip's existing trailer state.
+For `total_size=14592`, `chunk_size=32`, the loop runs 456 iters
+(count = 0..455). Iter 455 writes flash `0x800 + 32 + 32*455 = 0x4100`
+from `buffer[14592 : 14624]` — **32 bytes past the end of a
+14592-byte vector**. Then a header-last write puts `buffer[0:32]` at
+flash 0x800.
+
+The bytes at `buffer[14592:14624]` are uninitialized heap memory:
+whatever happens to be in the allocation past the std::vector's end.
+They're deterministic for Dell's binary (same allocator, same
+allocation order across runs) but otherwise meaningless.
+
+This is consistent with:
+
+- The bytes being non-trivial (high entropy at the start) but ending
+  in 23 zeros — typical of a fresh `operator_new` allocation where
+  the OS-mapped page is mostly zero with a small leftover from a
+  prior heap allocation at the same address.
+- The marker not appearing anywhere in the `.upg`, parsed blobs, or
+  binaries we have — Wistron didn't put them there; their loop
+  bound just doesn't account for the implicit "+1 chunk" of writes.
+- The chip happily accepting the install regardless of the garbage —
+  per TI doc, flash 0x4100 is the start of Region 1 (secondary
+  firmware copy slot), and arbitrary content there sets `BootFlags82.
+  Region1Invalid`, which is a documented benign state. The chip
+  boots from Region 0.
+
+**Implementation**: allocate a 14624-byte buffer with the last 32
+bytes zeroed, then run Dell's loop verbatim. This writes 32 zeros at
+flash 0x4100, which the chip handles via the documented Region1
+Invalid path. Code-backed by:
+
+1. The asm proving Dell reads past-end of the vector (bug).
+2. The TI doc documenting `Region1Invalid` as tolerated.
+3. The chip's existing operation with whatever garbage was written
+   last install.
+
+Note that this is not "read-modify-write" — we're writing a
+deterministic safe value (zeros) rather than preserving Wistron's
+specific garbage. We can match Dell's actual byte-for-byte writes
+later if it ever turns out to matter, but there's no chip-side
+reason it would.
 
 ## Plugin status — what works today
 
