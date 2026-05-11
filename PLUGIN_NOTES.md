@@ -1982,6 +1982,157 @@ just confirmation.
 
 ---
 
+## i2c-tunnel ISP loader session protocol (decoded 2026-05-10)
+
+The pre-bootloader HUB1/HUB2 staging uses a per-target session
+protocol over the i2c-tunnel (opcodes `0xC6` write, `0xD6` read).
+Decoded from libhub.so's `Rts5409s_IIC_API` class plus pairwise
+analysis of the captured trace.
+
+### Per-target session sequence
+
+| Step | Frame                                                              | Note                                                  |
+|------|--------------------------------------------------------------------|-------------------------------------------------------|
+| 1    | `c6 → slave  payload=25 03 00 00 02`  (5 bytes) + 1-byte poll      | **WAKE**: prime the downstream MCU's ISP loader.      |
+| 2    | `c6 → slave  payload=12 01 01`  (3 bytes) + 1-byte poll            | **BEGIN**: signal start of chunked transfer.          |
+| 3    | for each 64-byte chunk: `c6 → slave  payload=13 40 <64 bytes>` + 1-byte poll | bulk firmware streaming.                              |
+
+For the U4025QW these are issued to slave `0xD4` (HUB1) and `0xD6`
+(HUB2). After WAKE, Dell also issues a `d6 count=3` read that returns
+a 2-byte status payload (`02 01 04`); we don't currently decode it,
+and the chip proceeds without us issuing it.
+
+### Per-chunk readiness poll (`polling_status`)
+
+After every i2c-tunnel write (WAKE, BEGIN, or chunk), Dell issues a
+`d6 count=1` read and checks that wire-byte 0 == `0x01`. If not
+ready, sleep ~2ms and retry up to 20 times before failing.
+
+```
+host → c6 + payload     (chunk written into MCU's RAM buffer)
+host → d6 count=1       (poll request)
+chip → wire[0]=0x01     READY → next chunk
+       wire[0]≠0x01     BUSY  → sleep, retry
+       (no response)    BUSY  → sleep, retry
+```
+
+Source: `RTS5409s_IIC_API::polling_status()` in libhub.so. Verified
+against the captured trace: 2,051 c6 chunks to 0xD4 produced 2,098
+d6 polls (≈1.02 polls/chunk; most chunks pass on first try, a few
+need 2-3 polls).
+
+### cal_auth is NOT per-chunk
+
+Common misreading: the captured trace shows many cal_auth handshakes
+mid-staging, suggesting per-chunk re-auth. It's not — those handshakes
+mark **session boundaries** (target switch, vdcmd cycle), not
+per-chunk. Decomp evidence:
+
+- `RTS5409S_HID::hub_handshake()` (libdevices.so, called by every
+  i2c-tunnel write/read) is a **no-op stub** that just prints
+  "Handshake => skip." and returns 0.
+- The real work is in `RTS5409S_HID::hub_force_handshake()`, called
+  only from three places: device `open()` (twice, with vendor variants)
+  and `close()`.
+- Cached handshake state at `this[0x224]` is initialized to 0 in the
+  constructor and only set to `0xde` ("skip") by the user-facing
+  `skip_handshake()` API.
+
+Cal_auth empirical count: in the 6,265-event bulk HUB1 stage there are
+only **8 cal_auth handshakes** total, all at clear session boundaries.
+
+## Post-bootloader landscape (decoded 2026-05-10)
+
+### Device does NOT re-enumerate
+
+After the `0x40 E9` bootloader-entry trigger fires, the device stays
+on the same hidraw fd. No USB re-enumeration; no different VID/PID;
+the same wire protocol works (cal_auth, vdcmd, i2c-tunnel reads/writes).
+The chip is now running the freshly-loaded ISP shim firmware (HUB.fw
+on the primary, HUB4.fw on the secondary), but presents the same HID
+interface.
+
+This means the plugin doesn't need to lose+regain the device across
+the bootloader transition — the same fd carries both phases.
+
+### Op tally for the 212,106 post-bootloader events
+
+| op       | count   | role                                                          |
+|----------|--------:|---------------------------------------------------------------|
+| `c0 f3`  |  88,813 | **status_poll** (decoded earlier — wire[0] == 0xA0 = READY)   |
+| `40 f1`  |  13,312 | **SRAM_WRITE** — 128 B per frame × 13,312 = 1.7 MB ≈ DISPLAY  |
+| `40 d6`  |   8,466 | i2c-tunnel reads (mostly to slaves 0x94 and 0x42)             |
+| `40 c6`  |   4,077 | i2c-tunnel writes (mostly to slaves 0x42 and 0x94)            |
+| `40 e1`  |      35 | cal_auth (session boundaries)                                 |
+| `40 f4`  |      26 | block-init (one per 256-addr × 2-half block)                  |
+| `40 04`  |      26 | block-commit step 1                                           |
+| `40 f5`  |      26 | block-commit step 2                                           |
+| `40 06`  |      18 | enable_high_clock cycling                                     |
+| `40 02`  |       9 | enable_vdcmd cycling                                          |
+| `40 e9`  |       1 | second bootloader-entry trigger (immediately post-entry)      |
+| `c0 ca`  |       1 | unknown — single read right after entry; probably a probe     |
+| (ioctl)  |  97,296 | HIDIOCGINPUT readbacks (≈ count of c0/d6 ops)                 |
+
+### i2c-tunnel slaves used post-bootloader
+
+| slave   | c6 (W) | d6 (R) | likely role                                                   |
+|---------|-------:|-------:|---------------------------------------------------------------|
+| `0x94`  |    411 |  4,789 | NEW post-bootloader target — heavy polling, probably FL5500   |
+|         |        |        | in bootloader/ISP mode (was at `0x6e` pre-bootloader)         |
+| `0x42`  |  3,664 |  3,675 | panel bus (FLrd/FLad/FLwd) — pre-bootloader was ack-only;     |
+|         |        |        | post-bootloader gets heavy use, suggesting actual panel I/O   |
+| `0x6e`  |      2 |      2 | DDC/CI scaler — minimal, probably one diagnostic exchange     |
+
+### F1 (SRAM_WRITE) frame layout
+
+```
+40 f1 <half> <addr> 00 00 80 00 00 00 [128 bytes of firmware data]
+       ^      ^                  ^
+       |      block-relative addr (0x00..0xFF, sequential)
+       |      (paired with each addr: low half then high half)
+       low half (0x00) or high half (0x80) of the 256-byte addr line
+                                  length = 0x80 = 128
+```
+
+Each write delivers 128 bytes. 256 addrs × 2 halves = 512 frames per
+block. 26 blocks × 512 = 13,312 frames × 128 B = 1,703,936 B,
+matching DISPLAY's payload size (1,705,768 B — close enough that the
+delta is probably trailing alignment we haven't accounted for).
+
+Per-frame F3 polling: ~88,813 polls / 13,312 writes ≈ 6.6 polls per
+write. Most return READY immediately; a small fraction (~26 polls
+total) returned BUSY, all observed at block-finalize boundaries
+(see "0xC0 F3 status poll" earlier — the BUSY response is what
+signals the chip is computing the block CRC).
+
+### Block-bracket sequence (F4 / 04 / F5)
+
+Each of the 26 blocks is bracketed by:
+
+```
+40 d6 75 00 00 00 01 00 94 01    (1-byte read from slave 0x94 sub 0x75 — pre-block status)
+40 f4 ...                         (block-init)
+[ 512 × (40 f1 chunk + c0 f3 poll until READY) ]
+40 04 ...                         (block-commit step 1)
+40 f5 ...                         (block-commit step 2)
+```
+
+Exact F4/04/F5 payload contents not yet decoded — that's the next
+task block to tackle.
+
+### Post-bootloader phase map (planned implementation chunks)
+
+| Phase | Range / Volume              | Content                                                                              |
+|-------|----------------------------:|--------------------------------------------------------------------------------------|
+| A     | ~12K events (ev 10250..22176) | Setup: cal_auth/vdcmd cycle (in bootloader mode), `C0 CA` probe, slave 0x94/0x42 init |
+| B     | ~200K events                  | DISPLAY block-write loop: 26× (F4 + 512×(F1+F3 polls) + 04+F5)                       |
+| C     | ~5K events                    | PDC flash via slave 0x94 (probably i2c-tunnel pattern reused)                        |
+| D     | ~few hundred events           | Verify + cleanup                                                                     |
+
+Phase A is unblocking — getting the emulator cursor past the gap
+between bootloader-entry and the first F1 lets us then verify F4/F5
+decoding sits where we expect it to.
+
 ## Plugin status — what works today
 
 Snapshot of the in-tree plugin at `/agents/ada/projects/fwupd/plugins/dell-monitor-rt/`.
