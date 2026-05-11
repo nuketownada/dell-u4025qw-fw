@@ -2262,21 +2262,19 @@ This is consistent with:
   Region1Invalid`, which is a documented benign state. The chip
   boots from Region 0.
 
-**Implementation**: allocate a 14624-byte buffer with the last 32
-bytes zeroed, then run Dell's loop verbatim. This writes 32 zeros at
-flash 0x4100, which the chip handles via the documented Region1
-Invalid path. Code-backed by:
+**Implementation**: fix the bug — iterate exactly `(total - chunk) /
+chunk = (14592 - 32) / 32 = 455` times for the main loop (writing
+addresses 0x820..0x40E0 with `PDC.fw[32:14592]`), then header-last
+write at 0x800 with `PDC.fw[0:32]`. Total: 456 FLwd writes, all
+inside PDC.fw's actual bytes. Don't emit the iter-455 garbage write
+at flash 0x4100. Code-backed by:
 
-1. The asm proving Dell reads past-end of the vector (bug).
-2. The TI doc documenting `Region1Invalid` as tolerated.
-3. The chip's existing operation with whatever garbage was written
-   last install.
-
-Note that this is not "read-modify-write" — we're writing a
-deterministic safe value (zeros) rather than preserving Wistron's
-specific garbage. We can match Dell's actual byte-for-byte writes
-later if it ever turns out to matter, but there's no chip-side
-reason it would.
+1. The asm proving Dell's iter 455 reads past-end (a bug).
+2. PDC.fw is exactly 14592 bytes (verified — sum16 matches metadata
+   `crc16=BA77`).
+3. The chip's "Region 1" slot at flash 0x4100 stays in whatever
+   state it was already in, which for a clean monitor is consistent
+   with how the chip already booted successfully.
 
 ## Plugin status — what works today
 
