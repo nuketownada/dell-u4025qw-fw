@@ -73,6 +73,7 @@ import ghidra.program.model.data.Undefined4DataType;
 import ghidra.program.model.data.Undefined8DataType;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Function.FunctionUpdateType;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Parameter;
 import ghidra.program.model.listing.ParameterImpl;
@@ -301,9 +302,26 @@ public class RecoverWistronClasses extends GhidraScript {
 	}
 
 	/**
-	 * Find every function in the class's namespace and set its first
-	 * (`this`) parameter type to `<ClassName> *`. Skips destructors which
-	 * Ghidra tends to track separately.
+	 * Find every function in the class's namespace and type its `this`
+	 * parameter as `<ClassName> *`.
+	 *
+	 * Two cases to handle:
+	 *
+	 *   - The method was auto-detected as `__thiscall` and has a `this`
+	 *     parameter already. We just need to retype it.
+	 *   - The method was mis-detected as `__stdcall` (Ghidra's analyzer
+	 *     guesses calling conventions from prologue+epilogue patterns and
+	 *     gets it wrong sometimes; the function body still references
+	 *     `this` via the implicit `in_RDI` register). We need to:
+	 *        (a) flip the calling convention to `__thiscall`, AND
+	 *        (b) materialize a `this` parameter, AND
+	 *        (c) retype it.
+	 *     We do all three by calling `updateFunction` with a parameter
+	 *     list whose first entry is `this: <ClassName>*`. Ghidra picks
+	 *     storage from the calling convention (RDI on x86-64 SysV).
+	 *
+	 * Skips entries in the namespace that aren't functions (vtables,
+	 * typeinfo, static class members — these have no `getFunctionAt`).
 	 */
 	private int applyToMethods(String className, Structure classStruct) throws Exception {
 		Namespace ns = findNamespace(className);
@@ -314,6 +332,7 @@ public class RecoverWistronClasses extends GhidraScript {
 		PointerDataType thisType = new PointerDataType(classStruct, pointerSize, dtm);
 
 		int count = 0;
+		int forced = 0;
 		SymbolIterator iter = symbolTable.getSymbols(ns);
 		while (iter.hasNext()) {
 			Symbol sym = iter.next();
@@ -321,37 +340,54 @@ public class RecoverWistronClasses extends GhidraScript {
 			if (f == null) {
 				continue;
 			}
-			Parameter[] params = f.getParameters();
-			if (params.length == 0 || !"this".equals(params[0].getName())) {
-				// Ghidra typically auto-names the first param `this` for
-				// __thiscall functions. If it didn't here, we don't have a
-				// safe way to identify the this-param.
-				continue;
-			}
 			try {
-				// __thiscall's `this` is an auto-parameter (Ghidra
-				// reserves register storage based on the calling
-				// convention). Auto-parameters can't be directly retyped;
-				// flipping the function to "custom variable storage" lets
-				// us own the parameter list. After the change Ghidra
-				// stops auto-assigning storage for this function, but the
-				// register we'd pick is the same one __thiscall already
-				// used, so the storage stays effectively identical.
-				if (!f.hasCustomVariableStorage()) {
-					f.setCustomVariableStorage(true);
+				Parameter[] params = f.getParameters();
+				boolean hasThis = params.length > 0 && "this".equals(params[0].getName());
+
+				if (hasThis) {
+					// __thiscall already in place — flip to custom storage
+					// and retype param[0]. setCustomVariableStorage may
+					// rebuild the parameter array, so re-fetch.
+					if (!f.hasCustomVariableStorage()) {
+						f.setCustomVariableStorage(true);
+					}
+					params = f.getParameters();
+					if (params.length > 0 && "this".equals(params[0].getName())) {
+						params[0].setDataType(thisType, SourceType.USER_DEFINED);
+						count++;
+					}
 				}
-				// After setCustomVariableStorage the parameter array may
-				// have been rebuilt; re-fetch.
-				params = f.getParameters();
-				if (params.length > 0 && "this".equals(params[0].getName())) {
-					params[0].setDataType(thisType, SourceType.USER_DEFINED);
+				else {
+					// Ghidra mis-detected the calling convention. Build a
+					// new parameter list with `this` first plus whatever
+					// args were there, force __thiscall, and let dynamic
+					// storage assignment pick the register for this. The
+					// existing args (if any) keep their types — we're
+					// only inserting `this` at slot 0.
+					List<Parameter> newParams = new ArrayList<>();
+					newParams.add(
+						new ParameterImpl("this", thisType, currentProgram));
+					for (Parameter p : params) {
+						newParams.add(p);
+					}
+					f.updateFunction(
+						"__thiscall",
+						null,
+						newParams,
+						Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+						true,
+						SourceType.USER_DEFINED);
 					count++;
+					forced++;
 				}
 			}
 			catch (Exception ex) {
 				printerr("    " + f.getName() + " @ " + f.getEntryPoint() +
 					": " + ex.getMessage());
 			}
+		}
+		if (forced > 0) {
+			println("    (" + forced + " method(s) had calling convention forced to __thiscall)");
 		}
 		return count;
 	}
