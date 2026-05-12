@@ -1,0 +1,51 @@
+{
+  "//": "Class descriptors for libdisplay.so. See RecoverWistronClasses.java",
+  "//": "for the schema. Offsets and slot numbers are byte offsets, not",
+  "//": "indices — they match what shows up in the existing decomp.",
+  "classes": [
+    {
+      "name": "IIC_INTF",
+      "//": "Abstract transport base. Every chip-specific subclass overrides",
+      "//": "a subset of these slots. Field offsets are intentionally sparse",
+      "//": "— we only name what we've reverse-engineered.",
+      "size": "0x180",
+      "vtable": {
+        "0x20": { "name": "open_pid",          "//": "(IIC_INTF*, u16 vid, u16 pid, u32 idx, u8 speed)" },
+        "0x28": { "name": "open_path",         "//": "(IIC_INTF*, string* path, u8 speed)" },
+        "0x40": { "name": "is_open",           "//": "(IIC_INTF*) -> bool" },
+        "0x48": { "name": "close",             "//": "(IIC_INTF*)" },
+        "0x58": { "name": "check_image",       "//": "(IIC_INTF*, u8* src, u32 size, u32* blocks, u32* blksize, u32* sigsize) -> u8" },
+        "0x60": { "name": "get_block_address", "//": "(IIC_INTF*, u8* src, u32 blk_idx) -> u32" },
+        "0x68": { "name": "get_block_data",    "//": "(IIC_INTF*, u32 src_idx, u32 count, u8* out) -> u8" },
+        "0x70": { "name": "secure_enter_isp",  "//": "(IIC_INTF*) -> u8" },
+        "0x78": { "name": "secure_exit_isp",   "//": "(IIC_INTF*) -> u8" },
+        "0x80": { "name": "secure_check_empty","//": "(IIC_INTF*, u32 addr) -> u8" },
+        "0x90": { "name": "secure_program",    "//": "(IIC_INTF*, SECURE_PROG_CFG* cfg) -> u8" },
+        "0xc0": { "name": "secure_check_wp_pin","//": "(IIC_INTF*) -> u8" },
+        "0xf0": { "name": "read_seq",          "//": "(IIC_INTF*, u8 slave, u8 reg, u8 count, u8* out) -> u8 — read N i2c bytes starting at reg" },
+        "0x120":{ "name": "write_byte",        "//": "(IIC_INTF*, u8 slave, u8 reg, u8 val) -> u8 — write single i2c byte" }
+      }
+    },
+    {
+      "name": "REALTEK_API",
+      "//": "RealTek panel-scaler chip access on top of IIC_INTF. The",
+      "//": "concrete class is `MStarISP` derived; REALTEK_API is the",
+      "//": "transport+SPI-flash facade. Constructor populates this+0..7",
+      "//": "from .rodata 0x1adcf0 = `38 10 00 00 28 fe 00 00` — those are",
+      "//": "chip-specific SPI WP register access bytes used by",
+      "//": "spi_disable_wp_pin/spi_set_wp_status.",
+      "size": "0x240",
+      "fields": [
+        { "offset": "0x00", "type": "u32", "name": "chip_config_a", "//": "from .rodata DAT_001adcf0 byte 0..3 = 0x1038" },
+        { "offset": "0x04", "type": "u32", "name": "chip_config_b", "//": "byte 4..7 = 0xFE28" },
+        { "offset": "0x08", "type": "u32", "name": "chip_flags",    "//": "ctor sets 0x1010001" },
+        { "offset": "0x2C", "type": "u32", "name": "jedec_id",      "//": "filled by spi_read_jedec_id (3-byte 0x9F op + 1-byte 0xAB RES op packed)" },
+        { "offset": "0x30", "type": "u8",  "name": "isp_mode",      "//": "0=normal, 1=in-ISP (set by enter_isp on success)" },
+        { "offset": "0x31", "type": "u8",  "name": "i2c_slave",     "//": "= 0x94 (target chip's i2c address)" },
+        { "offset": "0x38", "type": "IIC_INTF*", "name": "iic",     "//": "transport — most calls dispatch through here" },
+        { "offset": "0x40", "type": "void*", "name": "log",         "//": "ModuleMessage* — null when logging disabled" }
+      ],
+      "vtable": {}
+    }
+  ]
+}

@@ -83,6 +83,36 @@
           '';
         };
 
+        # `recover-classes <binary-basename>` — apply our hand-written
+        # class layouts + vtable typing from
+        # `ghidra/scripts/wistron-classes/<binary>.json` to the
+        # already-imported binary. Ghidra's built-in
+        # RecoverClassesFromRTTIScript skips classes with virtual
+        # inheritance on the GCC path (which is most of Wistron's chip
+        # hierarchies), so we type them by hand. After running this the
+        # decomp resolves `*(code **)(*plVar + 0x120)` to
+        # `plVar->vtable->write_byte`, which is dramatically more
+        # readable. Idempotent.
+        recoverClassesScript = pkgs.writeShellApplication {
+          name = "recover-classes";
+          runtimeInputs = [ ghidra ];
+          text = ''
+            if [[ $# -lt 1 ]]; then
+              echo "usage: recover-classes <binary-basename>" >&2
+              echo "       (e.g. recover-classes libdisplay.so)" >&2
+              echo "       requires ghidra/scripts/wistron-classes/<binary>.json" >&2
+              exit 2
+            fi
+            target="$1"
+            exec ghidra-analyzeHeadless \
+              "${projectDir}" "${projectName}" \
+              -process "$target" \
+              -scriptPath "${scriptsDir}" \
+              -postScript RecoverWistronClasses.java \
+              -noanalysis
+          '';
+        };
+
         # `decompile <binary-basename>` — re-decompile an already-
         # imported binary and dump every function to decomp/<name>.c.
         # Idempotent on the RTTI recovery pass (the script no-ops if
@@ -147,6 +177,12 @@
             type = "app";
             program = "${decompileScript}/bin/decompile";
           };
+          # `nix run .#recover-classes -- libdisplay.so` — apply
+          # hand-written class layouts from wistron-classes/*.json
+          recover-classes = {
+            type = "app";
+            program = "${recoverClassesScript}/bin/recover-classes";
+          };
         };
 
         devShells.default = pkgs.mkShell {
@@ -155,6 +191,7 @@
             ghidra
             analyzeScript
             decompileScript
+            recoverClassesScript
             (pkgs.python3.withPackages (ps: with ps; [
               # parse-upg.py + the other analysis scripts:
               pycryptodome
@@ -173,6 +210,7 @@
             echo " ghidra                   — GUI Ghidra 12 (no CCA extension yet)"
             echo " ghidra-analyzeHeadless   — raw headless"
             echo " analyze <bin>            — import + full analysis + RTTI recovery"
+            echo " recover-classes <bin>    — apply hand-written class layouts from wistron-classes/<bin>.json"
             echo " decompile <bin>          — re-decompile to ghidra/decomp/<name>.c"
             echo
             echo " Binaries live under: ${binariesDir}/"
