@@ -28,3 +28,14 @@ comparison/*/extracted/
 
 # Decryption derivable from `ecies-decrypt` + the captured input blob.
 captures/decrypted-*.bin
+
+# Ghidra project DBs (binary, regeneratable via `nix run .#analyze`).
+# Decomp outputs in ghidra/decomp/ ARE committed (text, expensive to
+# regenerate, valuable as documentation).
+ghidra/project*/
+ghidra/decomp/__pycache__/
+ghidra/scripts/__pycache__/
+
+# Nix build outputs
+result
+result-*

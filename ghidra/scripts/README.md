@@ -1,60 +1,74 @@
 # Ghidra headless decompile workflow
 
-We decompile each binary in Dell's monitorfirmwareupdateutility .deb to
-plain C and grep through the result. This makes navigation 10× faster
-than `objdump | grep` on the raw .so files.
+We decompile each binary in Dell's monitorfirmwareupdateutility .deb
+to plain C and grep through the result. This makes navigation 10×
+faster than `objdump | grep` on the raw .so files.
 
 ## Setup
 
-Ghidra ships in nixpkgs:
+Everything goes through the repo's flake (Ghidra 12 from
+nixpkgs-unstable, pinned in `flake.lock`):
 
 ```sh
-nix run nixpkgs#ghidra
+cd /path/to/dell-u4025qw-fw
+
+# Dev shell with all tooling on PATH:
+nix develop
+
+# Or one-shot invocations without entering the shell:
+nix run .#ghidra                  # GUI
+nix run .#analyze -- <binary>     # import + analyze + RTTI recovery
+nix run .#decompile -- <binary>   # re-decompile to ghidra/decomp/<name>.c
+nix run .#ghidra-analyzeHeadless  # raw headless escape hatch
 ```
 
-The headless driver is `ghidra-analyzeHeadless`.
+The `analyze` / `decompile` wrappers know the project layout — pass
+just the relative binary path/basename, not full paths.
 
-## One-shot decompile
+## Typical flow
 
 ```sh
-GHIDRA=$(nix-build '<nixpkgs>' -A ghidra --no-out-link)/bin/ghidra-analyzeHeadless
+# First time on a new binary: import + full analysis pass.
+nix run .#analyze -- plugins/libdisplay.so
 
-# Pick one of: libdevices.so, libhub.so, libdisplay.so, libpdc.so, "Firmware Updater"
-TARGET=plugins/libhub.so
-OUT=$(basename "$TARGET" .so).c
+# After tweaking a script, or to refresh the dumped C from the
+# already-analyzed project (fast, no re-analysis):
+nix run .#decompile -- libdisplay.so
 
-$GHIDRA \
-  ../project DellMonitorRT \
-  -import "../../extracted/usr/share/Dell/firmware/U4025QW/$TARGET" \
-  -scriptPath . \
-  -postScript DumpDecompiled.java "../decomp/$OUT" \
-  -overwrite
+# Browse: every function is bracketed by a marker comment.
+bash ghidra/scripts/find-fn.sh ghidra/decomp/libdisplay.c \
+    "REALTEK_API::spi_unit_erase"
 ```
 
-The Ghidra DB lives in `../project/`; .gitignored because it's large
-and binary. The decompile outputs live in `../decomp/*.c` and ARE
-checked in (text-compressible, expensive to regenerate, valuable as
-documentation).
+The Ghidra project DB lives in `ghidra/project/` (large, binary,
+.gitignored — regenerable via `analyze`). The decompile outputs in
+`ghidra/decomp/*.c` ARE checked in (text-compressible, expensive to
+regenerate, valuable as documentation cross-references).
 
-### Python alternative (DumpDecompiled.py)
+## Class recovery
 
-`DumpDecompiled.py` is a Jython equivalent of the Java script. Use
-it when Ghidra fails to load the Java script (a known issue on some
-Ghidra 11.x versions: `Failed to find source bundle containing
-script`). Output filename comes from the `DUMP_OUT` env var instead
-of `-postScript` args:
+`analyze` runs Ghidra's built-in `RecoverClassesFromRTTIScript`
+during the analysis pass. This recovers vftable layouts and names
+them in the decomp (e.g. `CryptoPP::SHA3::vftable` instead of
+`&PTR__SHA3_003345b8`). However:
 
-```sh
-DUMP_OUT="../decomp/$OUT" $GHIDRA \
-  /tmp/ghidra-libpdc tmp_pdc \
-  -import "../../extracted/usr/share/Dell/firmware/U4025QW/$TARGET" \
-  -scriptPath . \
-  -postScript DumpDecompiled.py \
-  -overwrite
-```
+- The built-in script's GCC class recovery is labeled "early stages
+  of development" in its own docstring and **skips classes with
+  virtual inheritance** — which is most of Wistron's chip classes
+  (IIC_INTF / HID_INTF base ⇄ RTS5409S_HID / FL5500_IIC_API / …
+  overrides). So vtable-dispatch calls inside those classes stay as
+  raw `*(code **)(lVar5 + 0x120)` indirect calls rather than
+  resolving to named member-function calls.
+- The standalone `Ghidra-Cpp-Class-Analyzer` extension was designed
+  to fix exactly this, but the upstream (astrelsky) was archived in
+  Oct 2023, and the only active fork (Fancy2209) hasn't completed
+  the port to Ghidra 12 — `./nix/cpp-class-analyzer.nix` builds
+  cleanly through the gradle setup but hits 30 API-mismatch compile
+  errors. Worth revisiting if a fork catches up or we invest in
+  patching it.
 
-The output uses the same `// ===== <name> @ <addr> =====` markers as
-the Java version, so `find-fn.sh` works against either.
+For now: vtable resolution is partial; member-function dispatch in
+hand-written wrapper classes requires manual tracing.
 
 ## Probing decryption schemes for appconfig.dat
 
