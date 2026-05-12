@@ -2110,15 +2110,87 @@ signals the chip is computing the block CRC).
 Each of the 26 blocks is bracketed by:
 
 ```
-40 d6 75 00 00 00 01 00 94 01    (1-byte read from slave 0x94 sub 0x75 — pre-block status)
-40 f4 ...                         (block-init)
-[ 512 × (40 f1 chunk + c0 f3 poll until READY) ]
-40 04 ...                         (block-commit step 1)
-40 f5 ...                         (block-commit step 2)
+[ REALTEK_API::spi_unit_erase pass — many 40 c6/40 d6 frames to slave 0x94 ]
+40 f4 ...                         (RTS5409S_HID::erase_tmp_flash)
+[ 512 × 40 f1 ... — back-to-back F1 writes, NO F3 polls between ]
+40 04 ...                         (RTS5409S_HID::secure_control_gpio(6, 1))
+40 f5 ...                         (RTS5409S_HID::verify_tmp_flash mode 0)
+[ a few c0 f3 polls until READY (chip status byte = 0xa0) ]
+[ then the next block's spi_unit_erase pass starts, which itself
+  generates ~3000 more c0 f3 polls ]
 ```
 
-Exact F4/04/F5 payload contents not yet decoded — that's the next
-task block to tackle.
+The 88,813 total F3 polls / 26 blocks ≈ 3,400 polls per block — but
+~99% of those happen DURING the next block's spi_unit_erase phase
+(REALTEK_API's wait_ready busy-waits on slave 0x94's status register
+between erase steps), not in the inner write loop.
+
+### F4/04/F5 wire-format decode (from libdevices.so RTS5409S_HID)
+
+Decoded bytewise from `RTS5409S_HID::secure_program(SECURE_PROG_CFG)`
++ its three helpers:
+
+```
+F4 erase_tmp_flash — opcode-only, no payload:
+   wire: 40 f4 00 00 00 00 00 00 ...
+
+F1 write_tmp_flash(addr, src+addr+4, 0x80):
+   wire: 40 f1 <addr LE32> 80 00 ... [128 B payload @ wire offset 64]
+   addr sweeps 0x0000, 0x0080, 0x0100, …, 0xFF80 (512 frames per block).
+
+04 secure_control_gpio(0x06, 0x01) — commit-prep GPIO assert:
+   wire: 40 04 01 01 06 00 00 00 ...
+   Built from `*(u32*)buf+0x58 = 0x01044000` then
+   `*(u16*)buf+0x5c = CONCAT11(pin=0x06, value=0x01)`.
+
+F5 verify_tmp_flash(0, target_addr, src+blk_offset):
+   wire: 40 f5 94 01 <crc8> 00 <target_addr LE32> [56 zeros]
+         <64 B global pubkey @ wire offset 64>
+         <64 B per-block sig  @ wire offset 128>
+   wire byte 2 = 0x94 (constant from `*(u32*)buf+0x58 = 0x94f54000`).
+   wire byte 3 = `this[0x40]` = bus-speed cache (0x01 fast for slave 0x94).
+   wire byte 4 = CRC8/SMBus (poly 0x07, init 0, no reflection) over
+                 the 65536 firmware bytes of this block.
+   wire bytes 6..9 = target SPI flash addr (LE u32),
+                     = `(*(int*)this+0x1c) << 16 + block[0..4]`,
+                     where this+0x1c is set by
+                     RealtekISP::set_flash_start_index from the .upg's
+                     `flash_off_or_size` metadata field (= 0x20 for
+                     U4025QW DISPLAY).
+   wire bytes 64..127  = global pubkey (last 64 bytes of full blob).
+   wire bytes 128..191 = per-block sig (last 64 bytes of this 65604 B
+                         block).
+
+F3 status poll — 1-byte read of chip status:
+   wire: c0 f3 00 00 00 00 01 00 ...
+   Response wire byte 0 == 0xa0 means READY.
+```
+
+### Source-blob structure
+
+The decrypted DISPLAY firmware (1,705,768 B for the U4025QW) is laid
+out as:
+
+```
+block 0:    [4-byte target SPI addr LE] [65536 B firmware data] [64 B per-block ECDSA sig]
+block 1:    same
+...
+block 25:   same
+trailer:    [64 B global pubkey]
+
+total: N × 0x10044 + 0x40 (= 26 × 65604 + 64)
+```
+
+`RTS5409S_HID::check_image` validates the trailer-stripped size is a
+multiple of 0x10044 and copies the trailing 64 B into a class field
+(`this+0x1da`) for use as the F5 pubkey payload.
+
+### CRC-8 polynomial
+
+Verified against `RTS5409S_HID::crc8_lut` in libdevices.so .rodata:
+poly 0x07, init 0x00, refin=false, refout=false, xorout=0x00 — i.e.,
+standard CRC-8/SMBus. `cal_crc8('123456789')` = 0xF4 (matches the
+canonical SMBus reference vector).
 
 ### Post-bootloader phase map (planned implementation chunks)
 
