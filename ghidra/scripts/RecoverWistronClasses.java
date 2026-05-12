@@ -444,6 +444,14 @@ public class RecoverWistronClasses extends GhidraScript {
 			}
 			return new PointerDataType(target, pointerSize, dtm);
 		}
+		// Embedded class instance (e.g. RealtekISP has a REALTEK_API
+		// sub-object at offset 8 — not a pointer, the whole struct is
+		// inline). Lets descriptors say `"type": "REALTEK_API"` with no
+		// asterisk and have the decompiler resolve `this+8` through
+		// `this->iic_api.chip_config_a`.
+		if (classStructs.containsKey(type)) {
+			return classStructs.get(type);
+		}
 		switch (type) {
 			case "u8": case "uint8": case "byte":
 				return AbstractIntegerDataType.getUnsignedDataType(1, dtm);
