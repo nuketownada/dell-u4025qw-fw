@@ -2192,6 +2192,50 @@ poly 0x07, init 0x00, refin=false, refout=false, xorout=0x00 — i.e.,
 standard CRC-8/SMBus. `cal_crc8('123456789')` = 0xF4 (matches the
 canonical SMBus reference vector).
 
+### Inter-block: REALTEK_API::spi_unit_erase + spi_read_crc
+
+Between block N's F5 commit and block N+1's F4 init the host runs
+chip-side flash maintenance on i2c slave 0x94 (the panel-scaler
+RealTek ISP shim), decoded from REALTEK_API in libdisplay.so:
+
+```
+[F3 polls until ready: 0xA0 (busy) → 0x00 (done) — ~3,400 polls]
+
+spi_unit_erase(addr_block_N+1, 0x10000):
+  i2c-W reg=0x64 val=(addr >> 16) & 0xFF        ; SPI start-addr MSB
+  i2c-W reg=0x65 val=(addr >>  8) & 0xFF        ; mid
+  i2c-W reg=0x66 val=(addr      ) & 0xFF        ; LSB
+  i2c-W reg=0x60 val=0xB8                        ; SPI command setup
+  i2c-W reg=0x61 val=0xD8                        ; SPI 64 KB block-erase opcode
+  i2c-W reg=0x60 val=0xB9                        ; trigger execute
+  [poll reg 0x60 until bit 0 clears — ~120 reads, SPI flash busy bit]
+
+spi_read_crc(addr_block_N+1, 0x10000) → expect 0xDE:
+  i2c-W reg=0x64..0x66 = start addr MSB..LSB
+  i2c-W reg=0x72..0x74 = (addr + 0x10000 - 1) MSB..LSB ; CRC end-addr (inclusive)
+  i2c-R reg=0x6F                                  ; pre-trigger status (= 0x92)
+  i2c-W reg=0x6F val=0x96                        ; trigger chip-side CRC8 compute
+  [poll reg 0x6F until value == 0x92 — ~60 reads, 0x94 = busy → 0x92 = done]
+  i2c-R reg=0x75                                  ; CRC8/SMBus result byte
+
+[F4 of block N+1 starts]
+```
+
+Verify constants from REALTEK_API::spi_unit_erase decomp:
+- 64 KB block erase: expect CRC = 0xDE (= CRC-8/SMBus of 65536 0xFFs)
+- 4 KB sector erase: expect CRC = 0x09
+
+The `0xB8 / data / 0xB9` pattern is "load command bytes / payload byte
+/ trigger" — the chip's SPI controller's two-step register protocol.
+The `0xD8` opcode at reg 0x61 is the standard SPI flash 64 KB block-
+erase command (Winbond/Macronix W25Q-style). For 4 KB sector erase
+the opcode would be `0x20` (different SPI command).
+
+Wistron's wait_ready helper (REALTEK_API::wait_ready) busy-waits on
+bit 0 of reg 0x60 with a 200-attempt budget — bit set = SPI flash
+busy. The reg 0x6F polling for CRC compute uses a different status
+encoding (value-comparison rather than bit-mask).
+
 ### Post-bootloader phase map (planned implementation chunks)
 
 | Phase | Range / Volume              | Content                                                                              |
