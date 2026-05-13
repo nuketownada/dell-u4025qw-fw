@@ -1,69 +1,132 @@
 #!/usr/bin/env python3
 """
-Structured .upg parser.
+.upg parser, unified schema (verified against U4025QW M3T105 + U3224KB M2T105).
 
-The .upg format (reverse-engineered for the Dell U4025QW M3T105 bundle):
+The schema below was reverse-engineered from Dell's `Firmware Updater`
+binary (FUN_001b3960 = read_string, FUN_001b3c40 = read_string_list,
+FUN_001bfac0 = read_components), not guessed.
 
-  [HEADER]
-    u32 BE len + bytes   "UPG"
-    u32 BE len + bytes   format version, e.g. "1.0.6"
-    u32 BE len + bytes   product short name, e.g. "U4025QW"
-    u32 BE len + bytes   firmware bundle version, e.g. "M3T105"
-    u32 BE                component_count
+  HEADER (4 strings):
+    string  magic              ("UPG")
+    string  format_version     ("1.0.5" / "1.0.6")
+    string  product            ("U4025QW", "Dell U3224KB", ...)
+    string  fw_version         ("M3T105", "M2T105", ...)
 
-  [COMPONENT NAME TABLE]
-    for _ in range(component_count):
-      u32 BE len + bytes  component name (e.g. "HUB1")
+  LISTS (2 string-lists):
+    string_list  name_table    declared component names
+    string_list  panel_bound   subset of names that have a second
+                               metadata entry keyed by an encrypted
+                               panel_id (used for panel-firmware binding)
 
-  [BODY]
-    Sequence of length-prefixed records (u32 BE length + bytes). The
-    body groups records into per-component sections. Each section
-    starts with a marker triple:
-        u32 BE = 1                            (schema/version marker)
-        u32 BE len + bytes                    (re-emitted component name)
-        u32 BE = N                            (count of metadata records to follow)
-    followed by N records (each u32 BE + bytes, encrypted Base64URL).
-    After the metadata records, the binary firmware payload follows
-    as one large length-prefixed BIN record.
-    Sections appear in some order that may differ from the name table.
+  COMPONENTS:
+    u32   N        = name_table.size() + panel_bound.size()
+    for each of N components:
+      string      key       plaintext name (e.g. "HUB") OR
+                            encrypted-Base64URL panel_id for the
+                            panel-bound copy of a component
+      string[17]  fields    17 Base64URL-encrypted metadata fields,
+                            each decryptable with `Wistron@<product>`
+
+  BINARY:
+    u32   M        = N
+    for each of M binary entries:
+      string      key       matches one component's `key`
+      bytes       payload   ECIES-secp521r1 + Gunzip + HexDecode
+                            (decryptable with the static CK_PV key
+                             baked into every shipped libhub.so)
+
+  Optional TBT trailer follows for monitors with Thunderbolt — not
+  parsed here.
+
+Encoding primitives (everything uses big-endian length prefixes):
+  string      = u32 BE length || `length` bytes
+  string_list = u32 BE count  || count × string
 """
 
 from __future__ import annotations
 
-import string
+import string as _string
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 DECRYPT_TOOL = Path(__file__).resolve().parent / "decrypt-blob"
-B64URL_CHARS = set(string.ascii_letters.encode() +
-                   string.digits.encode() + b"-_")
+ECIES_TOOL = Path(__file__).resolve().parent / "ecies-decrypt"
+ECIES_KEY = Path(__file__).resolve().parent.parent.parent / "captures" / "CK_PV.pkcs8.der"
+B64URL_CHARS = set((_string.ascii_letters + _string.digits + "-_=").encode())
 
 
-def be32(buf: bytes, off: int) -> int:
-    return int.from_bytes(buf[off : off + 4], "big")
+# Field-index labels for the 17-field metadata payload, derived by
+# inspecting the U4025QW + U3224KB samples and cross-referencing libhub.
+# Indices are positional and stable across components (a slot may be
+# meaningless for a given component, in which case the value is "0").
+FIELD_LABELS = [
+    "product",            # 0   e.g. "U4025QW"
+    "version",            # 1   e.g. "1.04" or "M3T105" (per-component)
+    "build_date",         # 2   "YYYY-MM-DD"
+    "crc16",              # 3   4-char hex; 0000 for the second DISPLAY
+    "chip_guid",          # 4   primary chip-type GUID (libhub-internal)
+    "chip_guid_alt",      # 5   secondary / affiliated chip-type GUID
+    "usb_vid",            # 6   "0x0bda" etc.
+    "usb_pid",            # 7   "0x1100" etc.
+    "i2c_addr_or_idx",    # 8   "0xD4", "0x21", "1", or "0"
+    "param9",
+    "param10",
+    "param11",
+    "param12",
+    "param13",
+    "param14",
+    "flash_off_or_size",  # 15  "0x800", "0x109B"
+    "flash_size_or_end",  # 16  "0x4400", "0x223B"
+]
 
 
-def lp_string(buf: bytes, off: int) -> tuple[str, int]:
-    n = be32(buf, off)
-    return buf[off + 4 : off + 4 + n].decode("ascii", errors="replace"), off + 4 + n
+# ---------- low-level reader ----------------------------------------------
 
 
-def lp_bytes(buf: bytes, off: int) -> tuple[bytes, int]:
-    n = be32(buf, off)
-    return buf[off + 4 : off + 4 + n], off + 4 + n
+class Reader:
+    __slots__ = ("data", "off")
+    def __init__(self, data: bytes, off: int = 0) -> None:
+        self.data = data
+        self.off = off
+
+    def remaining(self) -> int:
+        return len(self.data) - self.off
+
+    def u32(self) -> int:
+        if self.off + 4 > len(self.data):
+            raise ValueError(f"u32 past EOF @{self.off:#x}")
+        v = int.from_bytes(self.data[self.off : self.off + 4], "big")
+        self.off += 4
+        return v
+
+    def bytes(self, n: int) -> bytes:
+        if self.off + n > len(self.data):
+            raise ValueError(f"read {n} bytes past EOF @{self.off:#x}")
+        b = self.data[self.off : self.off + n]
+        self.off += n
+        return b
+
+    def string(self) -> bytes:
+        n = self.u32()
+        return self.bytes(n)
+
+    def string_list(self) -> list[bytes]:
+        n = self.u32()
+        return [self.string() for _ in range(n)]
 
 
-def is_b64url(b: bytes) -> bool:
-    return len(b) >= 8 and all(c in B64URL_CHARS for c in b)
+# ---------- decrypt helper -------------------------------------------------
 
 
-def decrypt(passphrase: str, b64: str) -> str | None:
+def decrypt_metadata_field(passphrase: str, b: bytes) -> str | None:
+    """Decrypt a Wistron@<MODEL>-encrypted Base64URL metadata string."""
+    if not b or any(c not in B64URL_CHARS for c in b):
+        return None
     try:
         out = subprocess.run(
-            [str(DECRYPT_TOOL), passphrase, b64],
+            [str(DECRYPT_TOOL), passphrase, b.decode("ascii")],
             capture_output=True, text=True, check=False, timeout=10,
         )
         if out.returncode != 0:
@@ -73,179 +136,130 @@ def decrypt(passphrase: str, b64: str) -> str | None:
         return None
 
 
-@dataclass
-class UpgRecord:
-    offset: int
-    raw: bytes
-    decrypted: str | None = None  # populated for B64URL records
-
-    @property
-    def is_metadata(self) -> bool:
-        return is_b64url(self.raw)
-
-    @property
-    def is_binary(self) -> bool:
-        return not self.is_metadata and len(self.raw) > 64
+# ---------- model ----------------------------------------------------------
 
 
 @dataclass
-class UpgComponent:
-    name: str
-    name_at: int
-    record_count: int
-    metadata: list[UpgRecord] = field(default_factory=list)
-    payload: UpgRecord | None = None  # the big binary blob, if found in this section
+class Component:
+    key_raw: bytes               # the on-disk first string
+    key: str                     # printable form: plaintext name or decrypted panel_id
+    panel_bound: bool            # True if `key` was an encrypted panel_id
+    fields_raw: list[bytes]      # 17 Base64URL-encrypted strings
+    fields: list[str | None]     # decrypted fields (None if not b64 / decrypt failed)
+    payload: bytes | None = None # decrypted firmware (binary section)
 
 
 @dataclass
-class UpgFile:
+class Upg:
     path: Path
     raw: bytes
     magic: str
-    version: str
+    format_version: str
     product: str
     fw_version: str
-    component_names: list[str]
-    components: list[UpgComponent]
-    trailing: bytes  # whatever's left after the structured parse
+    name_table: list[str]
+    panel_bound: list[str]
+    components: list[Component] = field(default_factory=list)
+    binary_section_at: int = 0
+    trailer: bytes = b""
 
     @property
     def passphrase(self) -> str:
         return f"Wistron@{self.product}"
 
 
-def parse_header(data: bytes) -> tuple[UpgFile, int]:
-    """Parse header + component-name table. Returns (UpgFile, body_offset)."""
-    off = 0
-    magic, off = lp_string(data, off)
-    version, off = lp_string(data, off)
-    product, off = lp_string(data, off)
-    fw_version, off = lp_string(data, off)
-    comp_count = be32(data, off); off += 4
-
-    names = []
-    for _ in range(comp_count):
-        name, off = lp_string(data, off)
-        names.append(name)
-
-    upg = UpgFile(
-        path=Path(""), raw=data, magic=magic, version=version, product=product,
-        fw_version=fw_version, component_names=names, components=[], trailing=b"",
-    )
-    return upg, off
+# ---------- parser ---------------------------------------------------------
 
 
-def parse_lp_records(data: bytes, off: int) -> Iterator[UpgRecord]:
-    """Yield length-prefixed records (u32 BE length + bytes) starting at off."""
-    while off + 4 <= len(data):
-        rlen = be32(data, off)
-        if rlen == 0 or off + 4 + rlen > len(data):
-            return
-        rec = UpgRecord(offset=off, raw=data[off + 4 : off + 4 + rlen])
-        yield rec
-        off = off + 4 + rlen
+def parse_upg(data: bytes) -> Upg:
+    r = Reader(data)
+    magic = r.string().decode("ascii")
+    fmt   = r.string().decode("ascii")
+    prod  = r.string().decode("ascii")
+    fwver = r.string().decode("ascii")
 
+    name_table  = [s.decode("ascii") for s in r.string_list()]
+    panel_bound = [s.decode("ascii") for s in r.string_list()]
 
-def parse(data: bytes) -> UpgFile:
-    upg, off = parse_header(data)
-    expected = set(upg.component_names)
+    upg = Upg(path=Path(""), raw=data, magic=magic, format_version=fmt,
+              product=prod, fw_version=fwver,
+              name_table=name_table, panel_bound=panel_bound)
 
-    # Body schema:
-    #   1) bare u32 BE = 1   (start-of-body marker, present once at file start)
-    #   2) a sequence of length-prefixed records (u32 BE + bytes). A record
-    #      whose payload matches a component-table name marks the start of
-    #      that component's metadata block.
-    #   3) right after the FIRST name re-emission there is a bare u32 BE
-    #      "field count" (e.g. 7) that's NOT a length-prefixed record.
-    #      Subsequent components' name re-emissions are not followed by
-    #      this extra u32.
-    #   4) all other records are encrypted metadata blobs, with the
-    #      occasional binary-looking records that probably wrap firmware
-    #      payloads (we'll classify those by content).
-    if off + 4 > len(data):
-        upg.trailing = data[off:]
-        return upg
-    marker = be32(data, off)
-    if marker != 1:
-        upg.trailing = data[off:]
-        return upg
-    off += 4
-
-    current: UpgComponent | None = None
-    seen_first_name = False
-    while off + 4 <= len(data):
-        rlen = be32(data, off)
-        if rlen == 0 or off + 4 + rlen > len(data):
-            break
-        payload = data[off + 4 : off + 4 + rlen]
-        rec = UpgRecord(offset=off, raw=payload)
-
-        # Test for name re-emission.
+    # Components: u32 N + N × (key + 17 fields).
+    n = r.u32()
+    plaintext_names = set(name_table)
+    for _ in range(n):
+        key_raw = r.string()
         try:
-            as_str = payload.decode("ascii") if 1 <= rlen <= 64 else ""
+            key_ascii = key_raw.decode("ascii")
         except UnicodeDecodeError:
-            as_str = ""
+            key_ascii = ""
+        if key_ascii in plaintext_names:
+            key = key_ascii
+            panel_bound_flag = False
+        else:
+            decrypted = decrypt_metadata_field(upg.passphrase, key_raw)
+            key = decrypted if decrypted is not None else f"<unparsed: {key_raw[:32]!r}>"
+            panel_bound_flag = decrypted is not None
 
-        if as_str in expected:
-            current = UpgComponent(name=as_str, name_at=off, record_count=0)
-            upg.components.append(current)
-            off += 4 + rlen
-            # After the FIRST component's name, skip a bare u32 ("field count").
-            if not seen_first_name:
-                seen_first_name = True
-                if off + 4 <= len(data):
-                    off += 4   # skip the bare u32
-            continue
+        fields_raw = [r.string() for _ in range(17)]
+        fields = [decrypt_metadata_field(upg.passphrase, f) for f in fields_raw]
+        upg.components.append(Component(
+            key_raw=key_raw, key=key, panel_bound=panel_bound_flag,
+            fields_raw=fields_raw, fields=fields,
+        ))
 
-        if current is None:
-            current = UpgComponent(name="_pre", name_at=-1, record_count=0)
-            upg.components.append(current)
-        current.metadata.append(rec)
-        current.record_count += 1
-        off += 4 + rlen
+    # Binary section.
+    upg.binary_section_at = r.off
+    if r.remaining() < 4:
+        return upg
+    m = r.u32()
+    expected_keys = {c.key_raw for c in upg.components}
+    for _ in range(m):
+        if r.remaining() < 4:
+            break
+        key_raw = r.string()
+        if r.remaining() < 4:
+            break
+        payload = r.string()  # length-prefixed binary blob
+        # Match this entry to a component by key_raw.
+        for c in upg.components:
+            if c.payload is None and c.key_raw == key_raw:
+                c.payload = payload
+                break
 
-    upg.trailing = data[off:]
+    upg.trailer = data[r.off :]
     return upg
 
 
-def decrypt_metadata(upg: UpgFile, max_attempts: int | None = None) -> None:
-    """Decrypt every Base64URL metadata record in-place."""
-    n = 0
-    for comp in upg.components:
-        for rec in comp.metadata:
-            if not rec.is_metadata:
-                continue
-            n += 1
-            if max_attempts and n > max_attempts:
-                return
-            pt = decrypt(upg.passphrase, rec.raw.decode("ascii"))
-            rec.decrypted = pt
+# ---------- pretty-printer -------------------------------------------------
 
 
-def report(upg: UpgFile) -> None:
-    print(f"# {upg.path or '(stdin)'}: {len(upg.raw)} bytes")
-    print(f"# magic={upg.magic!r}  ver={upg.version!r}  product={upg.product!r}")
-    print(f"# fw_version={upg.fw_version!r}  passphrase={upg.passphrase!r}")
-    print(f"# components in name table: {upg.component_names}")
+def report(upg: Upg) -> None:
+    print(f"# {upg.path or '(stdin)'}: {len(upg.raw):,} bytes")
+    print(f"# magic={upg.magic!r}  fmt={upg.format_version!r}  "
+          f"product={upg.product!r}  fw_version={upg.fw_version!r}")
+    print(f"# passphrase={upg.passphrase!r}")
+    print(f"# name_table:  {upg.name_table}")
+    print(f"# panel_bound: {upg.panel_bound}")
+    print(f"# components:  {len(upg.components)}  "
+          f"(expect {len(upg.name_table) + len(upg.panel_bound)})")
     print()
-
-    for i, comp in enumerate(upg.components):
-        print(f"--- component[{i}] '{comp.name}' (re-emitted name @ {comp.name_at:#06x}) ---")
-        print(f"    record count: {comp.record_count}")
-        bin_records = [r for r in comp.metadata if not r.is_metadata]
-        meta_records = [r for r in comp.metadata if r.is_metadata]
-        print(f"    metadata records: {len(meta_records)}")
-        print(f"    binary records:   {len(bin_records)}")
-        for r in meta_records:
-            tag = repr(r.decrypted) if r.decrypted is not None else f"<not decrypted, {len(r.raw)} chars b64>"
-            print(f"      meta @{r.offset:#06x}  len={len(r.raw):3d}  {tag}")
-        for r in bin_records:
-            print(f"      bin  @{r.offset:#06x}  len={len(r.raw):8d}  head={r.raw[:24].hex()}…")
+    for i, c in enumerate(upg.components):
+        marker = "(panel-bound)" if c.panel_bound else ""
+        print(f"--- component[{i}] key={c.key!r} {marker}")
+        for label, raw, val in zip(FIELD_LABELS, c.fields_raw, c.fields):
+            print(f"      {label:18s} = {val!r}" if val is not None
+                  else f"      {label:18s} = <not b64> {raw[:32]!r}")
+        if c.payload:
+            print(f"      payload          : {len(c.payload):,} bytes  "
+                  f"head={c.payload[:16].hex()}…")
+        else:
+            print(f"      payload          : (none)")
         print()
-
-    print(f"--- trailing data: {len(upg.trailing)} bytes @ {len(upg.raw) - len(upg.trailing):#06x} ---")
-    if upg.trailing:
-        print(f"    head: {upg.trailing[:64].hex()}")
+    if upg.trailer:
+        print(f"--- trailer: {len(upg.trailer)} bytes @ {upg.binary_section_at:#06x}+...")
+        print(f"    head: {upg.trailer[:64].hex()}")
 
 
 def main() -> None:
@@ -253,9 +267,8 @@ def main() -> None:
         print(f"usage: {sys.argv[0]} <path/to/file.upg>", file=sys.stderr)
         sys.exit(2)
     path = Path(sys.argv[1])
-    upg = parse(path.read_bytes())
+    upg = parse_upg(path.read_bytes())
     upg.path = path
-    decrypt_metadata(upg)
     report(upg)
 
 
